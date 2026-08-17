@@ -10,6 +10,12 @@ import type {
   TraceEvent,
   WindowConfig,
 } from "./types";
+import {
+  createDefaultDocumentaryRequirements,
+  createDefaultPaymentMethods,
+  normalizeDocumentaryRequirements,
+  normalizePaymentMethods,
+} from "./centerJourneyConfig";
 
 const STORAGE_KEY = "ccvi-control-atencion-demo-v2-3";
 
@@ -64,6 +70,8 @@ const normalizeCenter = (center: CenterConfig): CenterConfig => ({
   ...center,
   serviceStartTime: normalizeServiceTime(center.serviceStartTime, DEFAULT_SERVICE_START_TIME),
   serviceEndTime: normalizeServiceTime(center.serviceEndTime, DEFAULT_SERVICE_END_TIME),
+  documentaryRequirements: normalizeDocumentaryRequirements(center.documentaryRequirements),
+  paymentMethods: normalizePaymentMethods(center.paymentMethods),
 });
 
 const normalizeData = (data: AppData): AppData => ({
@@ -159,9 +167,40 @@ const createWindow = (
 
 const windowSequencesFor = (center: CenterConfig): Record<string, number> =>
   center.windows.reduce<Record<string, number>>((acc, windowItem) => {
-    acc[windowItem.windowId] = 1;
+    acc[windowItem.windowId] = 0;
     return acc;
   }, {});
+
+const issuedWindowSequencesFor = (
+  data: AppData,
+  center: CenterConfig,
+  sessionId: string,
+): Record<string, number> => {
+  const sequences = windowSequencesFor(center);
+  const windowsByNumber = new Map(
+    center.windows.map((windowItem) => [windowItem.windowNumber, windowItem]),
+  );
+
+  Object.values(data.cases).forEach((caseItem) => {
+    if (caseItem.centerId !== center.centerId || caseItem.sessionId !== sessionId) return;
+
+    const match = /^V(\d+)-(\d+)$/.exec(caseItem.publicCode);
+    if (!match) return;
+
+    const windowNumber = Number(match[1]);
+    const publicSequence = Number(match[2]);
+    const issuingWindow = windowsByNumber.get(windowNumber);
+
+    if (!issuingWindow || !Number.isSafeInteger(publicSequence) || publicSequence < 1) return;
+
+    sequences[issuingWindow.windowId] = Math.max(
+      sequences[issuingWindow.windowId] ?? 0,
+      publicSequence,
+    );
+  });
+
+  return sequences;
+};
 
 export const defaultCenter = (now = Date.now()): CenterConfig => ({
   centerId: "ccvi-san-bernardo",
@@ -175,6 +214,8 @@ export const defaultCenter = (now = Date.now()): CenterConfig => ({
   kioskTimeoutSeconds: 12,
   qrEnabled: true,
   paperlessMode: true,
+  documentaryRequirements: createDefaultDocumentaryRequirements(),
+  paymentMethods: createDefaultPaymentMethods(),
   windows: [
     createWindow("ccvi-san-bernardo", 1, "representation", 1),
     createWindow("ccvi-san-bernardo", 2, "vehicle_owner", 2),
@@ -234,11 +275,14 @@ export const ensureSession = (data: AppData): AppData => {
   const existing = data.sessions[sessionId];
 
   if (existing) {
-    const missingSequences = center.windows.some(
-      (windowItem) => existing.windowSequences?.[windowItem.windowId] === undefined,
+    const normalizedSequences = issuedWindowSequencesFor(data, center, sessionId);
+    const sequencesAreCurrent = center.windows.every(
+      (windowItem) =>
+        existing.windowSequences?.[windowItem.windowId] ===
+        normalizedSequences[windowItem.windowId],
     );
 
-    if (!missingSequences) return data;
+    if (sequencesAreCurrent) return data;
 
     return {
       ...data,
@@ -246,10 +290,7 @@ export const ensureSession = (data: AppData): AppData => {
         ...data.sessions,
         [sessionId]: {
           ...existing,
-          windowSequences: {
-            ...windowSequencesFor(center),
-            ...existing.windowSequences,
-          },
+          windowSequences: normalizedSequences,
         },
       },
     };
@@ -335,7 +376,8 @@ export const createArrival = (data: AppData, serviceType: ServiceType): AppData 
   if (!assignedWindow || session.status !== "open" || !isCenterOpenForTickets(center)) return base;
 
   const now = Date.now();
-  const publicSequence = Math.max(1, session.windowSequences[assignedWindow.windowId] ?? 1);
+  const currentSequence = Math.max(0, session.windowSequences[assignedWindow.windowId] ?? 0);
+  const publicSequence = currentSequence + 1;
   const publicCode = formatPublicCode(assignedWindow.windowNumber, publicSequence);
   const caseId = `${center.shortCode}-${pad(session.nextGlobalArrivalSequence)}-${suffix()}`;
   const publicToken = `${caseId.toLowerCase()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -382,7 +424,7 @@ export const createArrival = (data: AppData, serviceType: ServiceType): AppData 
         nextGlobalArrivalSequence: session.nextGlobalArrivalSequence + 1,
         windowSequences: {
           ...session.windowSequences,
-          [assignedWindow.windowId]: publicSequence + 1,
+          [assignedWindow.windowId]: publicSequence,
         },
       },
     },
@@ -438,6 +480,8 @@ export const createCenter = (
     kioskTimeoutSeconds: 12,
     qrEnabled: true,
     paperlessMode: true,
+    documentaryRequirements: createDefaultDocumentaryRequirements(),
+    paymentMethods: createDefaultPaymentMethods(),
     windows,
     cashiers: Array.from({ length: safeCashiers }, (_, index) => ({
       cashierId: `${centerId}-cashier-${index + 1}`,
@@ -465,7 +509,15 @@ export const updateCenter = (
   centerId: string,
   patch: Pick<
     CenterConfig,
-    "name" | "shortCode" | "timezone" | "serviceStartTime" | "serviceEndTime" | "kioskTimeoutSeconds" | "qrEnabled"
+    | "name"
+    | "shortCode"
+    | "timezone"
+    | "serviceStartTime"
+    | "serviceEndTime"
+    | "kioskTimeoutSeconds"
+    | "qrEnabled"
+    | "documentaryRequirements"
+    | "paymentMethods"
   >,
 ): AppData => {
   const center = data.centers[centerId];
@@ -480,6 +532,8 @@ export const updateCenter = (
     serviceEndTime: normalizeServiceTime(patch.serviceEndTime, getCenterServiceHours(center).end),
     kioskTimeoutSeconds: clampInteger(patch.kioskTimeoutSeconds, 8, 30, center.kioskTimeoutSeconds),
     qrEnabled: patch.qrEnabled,
+    documentaryRequirements: normalizeDocumentaryRequirements(patch.documentaryRequirements),
+    paymentMethods: normalizePaymentMethods(patch.paymentMethods),
     updatedAt: Date.now(),
   };
 

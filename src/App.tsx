@@ -19,7 +19,6 @@ import {
   Person,
   PictureAsPdf,
   PlayArrow,
-  PrintDisabled,
   QrCode2,
   Refresh,
   Storefront,
@@ -59,6 +58,12 @@ import {
 } from "@mui/material";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PublicJourneyStepper } from "./components/PublicJourneyStepper";
+import {
+  getPublicJourneyPresentation,
+  getPublicJourneyStep,
+  isVisiblePublicCode,
+} from "./publicJourney";
 import type { AppData, CaseRecord, CenterConfig, Metrics, Role, ServiceType, SessionMetadata } from "./types";
 import { ccviBackgroundGradient, ccviPalette } from "./theme";
 import {
@@ -86,7 +91,6 @@ import {
   saveData,
   selectCenter,
   serviceLabels,
-  serviceSupportText,
   startCashierAttention,
   startValidation,
   stateLabels,
@@ -887,6 +891,11 @@ const KioskView = ({
   const [remainingSeconds, setRemainingSeconds] = useState(center.kioskTimeoutSeconds);
   const creatingTicketRef = useRef(false);
   const centerIsOpen = isCenterOpenForTickets(center);
+  const pendingWindow = pendingService
+    ? center.windows
+        .filter((item) => item.enabled && item.serviceType === pendingService)
+        .sort((a, b) => a.displayOrder - b.displayOrder)[0]
+    : undefined;
 
   const createTicket = (serviceType: ServiceType) => {
     if (creatingTicketRef.current) return;
@@ -942,10 +951,9 @@ const KioskView = ({
         <Card sx={{ width: "min(720px, 100%)" }}>
           <CardContent>
             <Stack spacing={4} alignItems="center" textAlign="center">
-              <Chip icon={<PrintDisabled />} label="Ticket paperless generado" color="secondary" />
-              <Box>
+              <Box role="status" aria-live="polite" aria-atomic="true">
                 <Typography variant="h6" color="text.secondary">
-                  Su número de atención
+                  Su número de atención es
                 </Typography>
                 <Typography
                   variant="h1"
@@ -960,16 +968,31 @@ const KioskView = ({
                   {lastCase.publicCode}
                 </Typography>
               </Box>
-              <Typography variant="h5">{lastCase.serviceLabel}</Typography>
-              <Alert severity="info" icon={<Storefront />}>
-                Pase a <strong>{windowItem?.name}</strong>. Mantenga este código durante todo el proceso.
+              <Typography variant="h5" component="p" fontWeight={700}>
+                {lastCase.serviceLabel}
+              </Typography>
+              <Alert severity="info" icon={<Storefront />} sx={{ width: "100%", textAlign: "left" }}>
+                <Typography variant="h6" component="p" fontWeight={700}>
+                  Pase a Ventanilla {windowItem?.windowNumber ?? lastCase.assignedWindowNumber}
+                </Typography>
+                <Typography component="p">
+                  Guarde este número. Lo necesitará durante todo el proceso.
+                </Typography>
               </Alert>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={3} alignItems="center">
-                <QRCodeSVG value={getPublicStatusUrl(lastCase.publicToken)} size={148} />
+                <QRCodeSVG
+                  value={getPublicStatusUrl(lastCase.publicToken)}
+                  size={148}
+                  title={`Código QR del número de atención ${lastCase.publicCode}`}
+                />
                 <Box textAlign={{ xs: "center", sm: "left" }}>
-                  <Typography variant="h6">Escanee este QR para guardar su número</Typography>
+                  <Typography variant="h6">Guarde su número de atención</Typography>
                   <Typography color="text.secondary">
-                    La página muestra solo su turno, estado público, ventanilla o caja asignada.
+                    Tome una fotografía de esta pantalla o escanee el código QR.
+                  </Typography>
+                  <Typography color="text.secondary">
+                    En esta página podrá consultar su número, la ventanilla asignada y, posteriormente, la caja a la
+                    que deberá dirigirse.
                   </Typography>
                 </Box>
               </Stack>
@@ -1062,31 +1085,78 @@ const KioskView = ({
           </Grid>
         </Grid>
         <Alert severity="success" icon={<QrCode2 />}>
-          No se imprime ticket. El código V1/V2 y el QR mantienen la trazabilidad completa.
+          Su número se mostrará en pantalla. Puede guardarlo con una fotografía o mediante el código QR.
         </Alert>
-        <Dialog open={Boolean(pendingService)} onClose={() => setPendingService(null)} fullWidth maxWidth="sm">
-          <DialogTitle>Revise su selección</DialogTitle>
+        <Dialog
+          open={Boolean(pendingService)}
+          onClose={() => setPendingService(null)}
+          fullWidth
+          maxWidth="sm"
+          aria-labelledby="kiosk-confirmation-title"
+          aria-describedby="kiosk-confirmation-description"
+        >
+          <DialogTitle id="kiosk-confirmation-title">Antes de continuar</DialogTitle>
           <DialogContent>
             {pendingService && (
-              <Stack spacing={2} sx={{ pt: 1 }}>
-                <Typography variant="h5">{serviceLabels[pendingService]}</Typography>
-                <Typography color="text.secondary">{serviceSupportText[pendingService]}</Typography>
-                <Alert severity="info">
-                  {pendingService === "representation"
-                    ? "Será atendido en Ventanilla 1."
-                    : "Será atendido en Ventanilla 2."}
-                </Alert>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} justifyContent="flex-end">
-                  <Button variant="outlined" onClick={() => setPendingService(null)}>
-                    Volver
-                  </Button>
-                  <Button variant="contained" disabled={!centerIsOpen} onClick={() => createTicket(pendingService)}>
-                    Confirmar y obtener turno
-                  </Button>
-                </Stack>
+              <Stack spacing={3} sx={{ pt: 1 }}>
+                <Typography id="kiosk-confirmation-description" variant="h6" component="p" fontWeight={700}>
+                  {serviceLabels[pendingService]}
+                </Typography>
+                <Box component="ol" sx={{ m: 0, pl: 3.5 }}>
+                  <Box component="li" sx={{ mb: 2 }}>
+                    <Typography variant="h6" component="h3" fontWeight={700}>
+                      Guarde su número
+                    </Typography>
+                    <Typography color="text.secondary">
+                      Saque su celular y tome una fotografía de la pantalla o escanee el código QR.
+                    </Typography>
+                    <Typography color="text.secondary">
+                      Necesitará este número durante todo el proceso.
+                    </Typography>
+                  </Box>
+                  <Box component="li" sx={{ mb: 2 }}>
+                    <Typography variant="h6" component="h3" fontWeight={700}>
+                      Pase al área de espera
+                    </Typography>
+                    <Typography color="text.secondary">
+                      Su atención corresponde a Ventanilla {pendingWindow?.windowNumber ?? "sin asignar"}.
+                    </Typography>
+                  </Box>
+                  <Box component="li">
+                    <Typography variant="h6" component="h3" fontWeight={700}>
+                      Espere el llamado
+                    </Typography>
+                    <Typography color="text.secondary">
+                      Mire el monitor y mantenga su documentación preparada.
+                    </Typography>
+                  </Box>
+                </Box>
+                {pendingWindow ? (
+                  <Alert severity="info" icon={<Storefront />}>
+                    <Typography component="p" fontWeight={700}>
+                      Será atendido en Ventanilla {pendingWindow.windowNumber}
+                    </Typography>
+                  </Alert>
+                ) : (
+                  <Alert severity="warning">
+                    No hay una ventanilla disponible para este tipo de atención. Solicite ayuda al personal del centro.
+                  </Alert>
+                )}
               </Stack>
             )}
           </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 3, gap: 1.5, flexDirection: { xs: "column-reverse", sm: "row" } }}>
+            <Button fullWidth={false} variant="outlined" onClick={() => setPendingService(null)}>
+              Volver
+            </Button>
+            <Button
+              variant="contained"
+              disabled={!centerIsOpen || !pendingWindow || !pendingService}
+              onClick={() => pendingService && createTicket(pendingService)}
+            >
+              Confirmar y obtener número
+            </Button>
+          </DialogActions>
         </Dialog>
       </Stack>
     </CenteredShell>
@@ -2107,7 +2177,13 @@ const AdminView = ({
           open={Boolean(editingCenter)}
           onClose={() => setEditingCenterId(null)}
           onSave={(patch) => {
-            setData((current) => updateCenter(current, editingCenter.centerId, patch));
+            setData((current) =>
+              updateCenter(current, editingCenter.centerId, {
+                ...patch,
+                documentaryRequirements: editingCenter.documentaryRequirements,
+                paymentMethods: editingCenter.paymentMethods,
+              }),
+            );
             setEditingCenterId(null);
           }}
           canDelete={canDeleteCenters}
@@ -2551,34 +2627,64 @@ const DeleteCenterDialog = ({
 
 const PublicStatusView = ({ data, token }: { data: AppData; token: string }) => {
   const caseItem = Object.values(data.cases).find((item) => item.publicToken === token);
-  const center = getCurrentCenter(data);
+  const center = caseItem ? data.centers[caseItem.centerId] : undefined;
+  const cashierNumber = caseItem?.cashierId?.match(/(\d+)$/)?.[1];
+  const cashierName = caseItem?.cashierId
+    ? center?.cashiers.find((cashier) => cashier.cashierId === caseItem.cashierId)?.name ??
+      (cashierNumber ? `Caja ${cashierNumber}` : "Caja asignada")
+    : null;
+  const presentation = caseItem
+    ? getPublicJourneyPresentation(caseItem, cashierName)
+    : null;
+  const hasVisiblePublicCode = caseItem
+    ? isVisiblePublicCode(caseItem.publicCode)
+    : false;
 
   return (
     <CenteredShell>
-      <Card sx={{ width: "min(520px, 100%)" }}>
-        <CardContent>
-          {!caseItem ? (
+      <Card sx={{ width: "min(760px, 100%)" }}>
+        <CardContent sx={{ p: { xs: 2.5, sm: 4 }, "&:last-child": { pb: { xs: 2.5, sm: 4 } } }}>
+          {!caseItem || !presentation || !hasVisiblePublicCode ? (
             <Alert severity="warning">No encontramos este turno. Revise el QR o consulte en ventanilla.</Alert>
           ) : (
-            <Stack spacing={2} textAlign="center">
-              <Chip label="Estado público del turno" color="secondary" />
-              <Typography
-                variant="h2"
-                color="primary"
-                aria-label={getAccessiblePublicCode(caseItem.publicCode)}
-                sx={{ fontVariantNumeric: "tabular-nums" }}
+            <Stack spacing={3}>
+              <Stack spacing={1.5} textAlign="center" alignItems="center">
+                <Chip label="Estado de su atención" color="secondary" />
+                <Typography variant="overline" color="text.secondary" fontWeight={700}>
+                  Su número de atención
+                </Typography>
+                <Typography
+                  variant="h2"
+                  color="primary"
+                  aria-label={getAccessiblePublicCode(caseItem.publicCode)}
+                  sx={{ fontVariantNumeric: "tabular-nums" }}
+                >
+                  {caseItem.publicCode}
+                </Typography>
+                <Typography color="text.secondary">{caseItem.serviceLabel}</Typography>
+                <Typography variant="h5">{presentation.title}</Typography>
+                {presentation.destination && (
+                  <Typography color="text.secondary" fontWeight={700}>
+                    {presentation.destination}
+                  </Typography>
+                )}
+              </Stack>
+
+              <Paper
+                component="section"
+                variant="outlined"
+                aria-labelledby="current-public-instruction"
+                sx={{ p: { xs: 2, sm: 2.5 }, bgcolor: "#f7f9fc" }}
               >
-                {caseItem.publicCode}
-              </Typography>
-              <Typography color="text.secondary">{caseItem.serviceLabel}</Typography>
-              <Typography variant="h5">{stateLabels[caseItem.currentState]}</Typography>
-              <Typography color="text.secondary">
-                {caseItem.cashierId
-                  ? `Pase a ${caseItem.cashierId.replace("cashier", "Caja ")}`
-                  : `Ventanilla: ${
-                      center.windows.find((item) => item.windowId === caseItem.assignedWindowId)?.name ?? "--"
-                    }`}
-              </Typography>
+                <Typography id="current-public-instruction" variant="h6" mb={1}>
+                  Qué debe hacer ahora
+                </Typography>
+                <Typography color="text.secondary">{presentation.description}</Typography>
+              </Paper>
+
+              <Divider />
+              <PublicJourneyStepper activeStep={getPublicJourneyStep(caseItem.currentState)} />
+
               <Alert severity="info">
                 Esta página no muestra datos personales, carpeta interna ni información documental.
               </Alert>

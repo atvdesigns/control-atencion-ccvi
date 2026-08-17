@@ -66,6 +66,23 @@ export interface CashierConfig {
   displayOrder: number;
 }
 
+export interface DocumentaryRequirement {
+  requirementId: string;
+  label: string;
+  enabled: boolean;
+}
+
+export type DocumentaryRequirementsByService = Record<
+  ServiceType,
+  DocumentaryRequirement[]
+>;
+
+export interface PaymentMethodConfig {
+  paymentMethodId: string;
+  label: string;
+  accepted: boolean;
+}
+
 export interface CenterConfig {
   centerId: string;
   shortCode: string;
@@ -80,6 +97,8 @@ export interface CenterConfig {
   paperlessMode: true;
   windows: WindowConfig[];
   cashiers: CashierConfig[];
+  documentaryRequirements: DocumentaryRequirementsByService;
+  paymentMethods: PaymentMethodConfig[];
   createdAt: number;
   updatedAt: number;
 }
