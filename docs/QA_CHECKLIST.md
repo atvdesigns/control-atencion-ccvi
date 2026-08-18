@@ -1,5 +1,16 @@
 # QA Checklist MVP v2.2
 
+## Numeración pública
+
+- [ ] Una jornada nueva genera como primer turno de Ventanilla 1 `V1-01`.
+- [ ] Una jornada nueva genera como primer turno de Ventanilla 2 `V2-01`.
+- [ ] Ventanilla 3 genera como primer turno `V3-01`.
+- [ ] El contador interno puede estar en `00`, pero `V1-00`, `V2-00` o `Vn-00` no se renderizan en ninguna superficie visible.
+- [ ] El segundo turno de Ventanilla 1 es `V1-02`.
+- [ ] El reinicio de jornada devuelve cada contador interno a `00` sin borrar el histórico.
+- [ ] Dos centros distintos pueden tener simultáneamente un turno `V1-01` sin colisión.
+- [ ] El `publicCode` no cambia al pasar a caja y no es reemplazado por `folderCode`.
+
 ## Tótem
 
 - Seleccionar "Representación, empresa o poder notarial".

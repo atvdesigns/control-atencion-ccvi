@@ -26,7 +26,8 @@
 
 - Cada centro de atencion define hora de inicio y termino de atencion desde el modal de creacion y edicion.
 - El totem no permite generar nuevos turnos fuera del horario laboral configurado.
-- La secuencia publica por ventanilla se reinicia diariamente con la jornada, comenzando nuevamente en `01`.
+- El contador interno de cada ventanilla se reinicia en `00` por centro, ventanilla y jornada. Este valor nunca se muestra como turno publico.
+- El primer turno publico despues del reinicio es `Vn-01`; la secuencia continua correlativamente desde `01`.
 - Las jornadas anteriores se mantienen para consulta de metricas y trazabilidad.
 - El administrador puede seleccionar centro y dia de atencion para revisar metricas.
 - En el MVP, la descarga para Excel se implementa como CSV compatible con Excel para evitar dependencias adicionales.

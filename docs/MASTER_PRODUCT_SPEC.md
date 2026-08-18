@@ -29,7 +29,8 @@ Sistema web paperless-first, multirrol y multicientro para ordenar la llegada de
 
 - Un solo codigo publico para el cliente durante todo el proceso.
 - Codigo publico por ventanilla: `V{windowNumber}-{sequence}`.
-- La primera secuencia diaria por ventanilla comienza en `01`.
+- El contador interno comienza en `00` por centro, ventanilla y jornada; `Vn-00` nunca es un turno publico.
+- La primera secuencia publica por ventanilla comienza en `01`.
 - Cero impresion de tickets en el MVP.
 - QR en pantalla como mecanismo para guardar el turno.
 - Carpeta fisica existente, pero no como fuente de verdad.
@@ -74,14 +75,19 @@ Sistema web paperless-first, multirrol y multicientro para ordenar la llegada de
 - El routing usa `serviceType`, no personalidad natural/juridica como regla principal.
 - Ventanilla 1 atiende representacion, empresas y poderes notariales.
 - Ventanilla 2 atiende propietarios de vehiculos retenidos.
-- La secuencia publica es independiente por ventanilla y jornada.
-- La primera secuencia emitida por cada ventanilla en la jornada es `01`.
+- La secuencia publica es independiente por centro, ventanilla y jornada.
+- El contador interno de cada ventanilla se inicia y se reinicia en `00`.
+- Los valores internos `V1-00`, `V2-00` y `Vn-00` nunca se muestran en interfaces, QR, display, caja, dashboards, reportes publicos ni mensajes al usuario.
+- La generacion incrementa primero el contador interno de `00` a `01` y luego crea el `publicCode`.
+- La primera secuencia emitida por cada ventanilla en la jornada es `01`: `V1-01`, `V2-01`, `V3-01` o `Vn-01`.
 - Cada centro define horario de inicio y termino de atencion.
 - El totem solo permite generar nuevos turnos dentro del horario laboral configurado para el centro.
-- Al iniciar una nueva jornada, la secuencia publica de cada ventanilla vuelve a `01` sin borrar los datos de jornadas anteriores.
+- Al iniciar una nueva jornada, el contador interno de cada ventanilla vuelve a `00`; el primer turno publico vuelve a `01` sin borrar los datos de jornadas anteriores.
 - Las metricas deben conservarse por centro y jornada para consulta administrativa.
 - El administrador puede exportar metricas por centro y dia en formato compatible con Excel y preparar una salida imprimible/PDF.
 - El codigo publico se mantiene aunque el caso sea reasignado.
+- El codigo publico se conserva al pasar a caja y no se genera un segundo codigo publico.
+- `folderCode` es un identificador interno independiente y no sustituye al codigo publico.
 - Una reasignacion conserva `caseId`, `publicToken`, `publicCode`, `arrivalAt` y `globalArrivalSequence`.
 - Documentacion incompleta no exige motivo obligatorio.
 - Solo casos aprobados entran a caja.

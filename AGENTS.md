@@ -269,35 +269,19 @@ Características:
 - Validación documental estándar.
 - Menor complejidad que Ventanilla 1.
 
-TURNOS PÚBLICOS
+NUMERACIÓN PÚBLICA
 
-Los códigos visibles deben usar:
-
-- Ventanilla 1:
-  V1-00
-  V1-01
-  V1-02
-  V1-03
-  ...
-
-- Ventanilla 2:
-  V2-00
-  V2-01
-  V2-02
-  V2-03
-  ...
-
-- Ventanillas futuras:
-  V3-00
-  V4-00
-  V5-00
-  ...
-
-El código público:
-- Se mantiene durante todo el recorrido.
-- No cambia al pasar a caja.
-- Se muestra en tótem, QR, operador, display y caja.
-- Nunca debe reemplazarse por un código interno de cara al cliente.
+- `V1-00`, `V2-00` y `Vn-00` son exclusivamente estados internos del contador de cada ventanilla.
+- El estado interno `00` nunca debe mostrarse como número de atención público.
+- El primer turno visible es `V1-01`, `V2-01`, `V3-01` o, para cualquier ventanilla N, `Vn-01`.
+- La secuencia pública comienza siempre en `01` y continúa correlativamente: `V1-01`, `V1-02`, `V1-03`; `V2-01`, `V2-02`, `V2-03`; y así sucesivamente.
+- Cada contador se reinicia de forma independiente por centro, ventanilla y jornada.
+- Al emitir un turno, el sistema incrementa primero el contador interno de `00` a `01` y luego crea el `publicCode`.
+- `Vn-00` nunca debe aparecer en el tótem, QR, display, dashboards visibles, reportes públicos, caja ni mensajes al usuario.
+- El `publicCode` se mantiene durante todo el proceso y no cambia al pasar a caja.
+- No se genera un segundo código público para la etapa de caja.
+- `folderCode` continúa siendo un identificador interno independiente y nunca reemplaza al `publicCode` de cara al usuario.
+- Codex no puede cambiar esta regla sin autorización explícita.
 
 CARPETA
 
@@ -892,27 +876,32 @@ Prueba como mínimo:
 2. Crear ventanillas.
 3. Crear cajas.
 4. Abrir jornada.
-5. Crear V1-00.
-6. Crear V2-00.
-7. Confirmar secuencias separadas.
-8. Escanear QR.
-9. Llamar desde Ventanilla 1.
-10. Llamar desde Ventanilla 2.
-11. Aprobar.
-12. Documentación incompleta.
-13. Rechazar.
-14. Generar folderCode.
-15. Insertar en cola de caja.
-16. Asignar FIFO.
-17. Concurrencia entre cajas.
-18. Mostrar display.
-19. Iniciar caja.
-20. Completar pago.
-21. No-show.
-22. Reasignar.
-23. Cerrar jornada.
-24. Consultar métricas.
-25. Revisar trazabilidad.
+5. Confirmar que una jornada nueva deja los contadores internos en `00` sin renderizarlos.
+6. Confirmar que el primer turno de Ventanilla 1 es `V1-01`.
+7. Confirmar que el primer turno de Ventanilla 2 es `V2-01`.
+8. Confirmar que el primer turno de Ventanilla 3 es `V3-01`.
+9. Confirmar que el segundo turno de Ventanilla 1 es `V1-02`.
+10. Confirmar que dos centros pueden emitir simultáneamente `V1-01`.
+11. Confirmar secuencias separadas por centro, ventanilla y jornada.
+12. Confirmar que el código público no cambia al pasar a caja.
+13. Escanear QR.
+14. Llamar desde Ventanilla 1.
+15. Llamar desde Ventanilla 2.
+16. Aprobar.
+17. Documentación incompleta.
+18. Rechazar.
+19. Generar folderCode.
+20. Insertar en cola de caja.
+21. Asignar FIFO.
+22. Concurrencia entre cajas.
+23. Mostrar display.
+24. Iniciar caja.
+25. Completar pago.
+26. No-show.
+27. Reasignar.
+28. Cerrar jornada.
+29. Consultar métricas.
+30. Revisar trazabilidad.
 
 ==================================================
 13. PRUEBAS DE ESTRÉS Y RENDIMIENTO
@@ -1354,4 +1343,3 @@ npm run lint
 npm run typecheck
 npm run test
 npm run build
-
