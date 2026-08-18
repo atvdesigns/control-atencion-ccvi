@@ -8,35 +8,41 @@ import type {
 const DEFAULT_REQUIREMENTS: DocumentaryRequirementsByService = {
   representation: [
     {
-      requirementId: "representation-identity",
-      label: "Documento de identidad vigente.",
+      requirementId: "representation-company-statutes",
+      label: "Estatutos de la empresa.",
       enabled: true,
     },
     {
-      requirementId: "representation-authorization",
-      label: "Poder notarial o documento que acredite la representación.",
+      requirementId: "representation-valid-powers",
+      label: "Certificado de vigencia de poderes.",
       enabled: true,
     },
     {
-      requirementId: "representation-procedure",
-      label: "Documentación requerida para el trámite.",
+      requirementId: "representation-legal-representative-identity",
+      label: "Cédula de identidad del representante legal.",
+      enabled: true,
+    },
+    {
+      requirementId: "representation-current-annotations",
+      label: "Certificado de anotaciones vigentes o padrón.",
       enabled: true,
     },
   ],
   vehicle_owner: [
     {
-      requirementId: "owner-identity",
-      label: "Documento de identidad vigente.",
+      requirementId: "owner-return-order",
+      label: "Orden de devolución del Juzgado de Policía Local.",
       enabled: true,
     },
     {
-      requirementId: "owner-ownership",
-      label: "Documento que acredite la propiedad del vehículo.",
+      requirementId: "owner-current-identity",
+      label: "Cédula de identidad vigente.",
       enabled: true,
     },
     {
-      requirementId: "owner-procedure",
-      label: "Documentación requerida para el trámite.",
+      requirementId: "owner-current-annotations",
+      label:
+        "Certificado de anotaciones vigentes o padrón emitido hace no más de 30 días.",
       enabled: true,
     },
   ],

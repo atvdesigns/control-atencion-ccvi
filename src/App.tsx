@@ -59,6 +59,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PublicJourneyStepper } from "./components/PublicJourneyStepper";
+import { PublicJourneyInformation } from "./components/PublicJourneyInformation";
 import {
   getPublicJourneyPresentation,
   getPublicJourneyStep,
@@ -2639,6 +2640,22 @@ const PublicStatusView = ({ data, token }: { data: AppData; token: string }) => 
   const hasVisiblePublicCode = caseItem
     ? isVisiblePublicCode(caseItem.publicCode)
     : false;
+  const showRequirements = caseItem
+    ? [
+        "arrived",
+        "waiting_document_validation",
+        "called_to_window",
+        "in_document_validation",
+      ].includes(caseItem.currentState)
+    : false;
+  const showPaymentMethods = caseItem
+    ? [
+        "approved_for_cashier",
+        "waiting_cashier",
+        "called_to_cashier",
+        "in_cashier_attention",
+      ].includes(caseItem.currentState)
+    : false;
 
   return (
     <CenteredShell>
@@ -2683,7 +2700,16 @@ const PublicStatusView = ({ data, token }: { data: AppData; token: string }) => 
               </Paper>
 
               <Divider />
-              <PublicJourneyStepper activeStep={getPublicJourneyStep(caseItem.currentState)} />
+              {!presentation.isExceptional && (
+                <PublicJourneyStepper activeStep={getPublicJourneyStep(caseItem.currentState)} />
+              )}
+
+              <PublicJourneyInformation
+                requirements={center?.documentaryRequirements[caseItem.serviceType] ?? []}
+                paymentMethods={center?.paymentMethods ?? []}
+                showRequirements={showRequirements}
+                showPaymentMethods={showPaymentMethods}
+              />
 
               <Alert severity="info">
                 Esta página no muestra datos personales, carpeta interna ni información documental.

@@ -38,6 +38,7 @@ export interface PublicJourneyPresentation {
   title: string;
   description: string;
   destination: string | null;
+  isExceptional: boolean;
 }
 
 export const getPublicJourneyPresentation = (
@@ -53,61 +54,74 @@ export const getPublicJourneyPresentation = (
         description:
           "Tome una fotografía de esta pantalla o conserve esta página para consultar su atención.",
         destination: windowDestination,
+        isExceptional: false,
       };
     case "waiting_document_validation":
       return {
         title: "Prepare su documentación",
         description: "Mantenga sus documentos disponibles mientras espera el llamado.",
         destination: windowDestination,
+        isExceptional: false,
       };
     case "called_to_window":
       return {
         title: `Diríjase a ${windowDestination}`,
         description: "Su número fue llamado. Preséntese en la ventanilla indicada.",
         destination: windowDestination,
+        isExceptional: false,
       };
     case "in_document_validation":
       return {
         title: "Atención en ventanilla",
         description: "El personal está revisando su documentación.",
         destination: windowDestination,
+        isExceptional: false,
       };
     case "documentation_incomplete":
       return {
         title: "El trámite no puede continuar por ahora",
-        description: "Consulte en la ventanilla los pasos necesarios para continuar.",
+        description:
+          "La documentación presentada está incompleta. Consulte en la ventanilla qué necesita para continuar.",
         destination: windowDestination,
+        isExceptional: true,
       };
     case "rejected":
       return {
         title: "El trámite no puede continuar",
-        description: "Consulte en la ventanilla las alternativas disponibles para su caso.",
+        description:
+          "El trámite no fue aprobado. Consulte en la ventanilla las alternativas disponibles para su caso.",
         destination: windowDestination,
+        isExceptional: true,
       };
     case "approved_for_cashier":
     case "waiting_cashier":
       return {
         title: "Espere el llamado a caja",
-        description: "Su documentación fue aprobada. Manténgase atento al monitor.",
+        description:
+          "Después de aprobar su documentación, vuelva al área de espera. Mantenga preparado su medio de pago. El monitor le indicará a qué caja debe dirigirse.",
         destination: null,
+        isExceptional: false,
       };
     case "called_to_cashier":
       return {
         title: cashierDestination ? `Diríjase a ${cashierDestination}` : "Diríjase a caja",
         description: "Su número fue llamado para continuar con el pago.",
         destination: cashierDestination,
+        isExceptional: false,
       };
     case "in_cashier_attention":
       return {
         title: "Atención en caja",
         description: "Complete el pago siguiendo las indicaciones del personal.",
         destination: cashierDestination,
+        isExceptional: false,
       };
     case "paused":
       return {
         title: "Pago pendiente",
         description: "Consulte en caja cómo retomar la atención cuando pueda continuar.",
         destination: cashierDestination,
+        isExceptional: true,
       };
     case "payment_completed":
     case "completed":
@@ -115,18 +129,22 @@ export const getPublicJourneyPresentation = (
         title: "Trámite finalizado",
         description: "El pago fue registrado y su atención ha finalizado.",
         destination: cashierDestination,
+        isExceptional: false,
       };
     case "no_show":
       return {
         title: "No se registró su presentación",
-        description: "Consulte al personal del centro para saber cómo continuar.",
+        description:
+          "No fue posible confirmar su presentación cuando se llamó su número. Consulte al personal del centro para saber cómo continuar.",
         destination: windowDestination,
+        isExceptional: true,
       };
     case "cancelled":
       return {
         title: "Turno cancelado",
         description: "Consulte al personal del centro si necesita solicitar una nueva atención.",
         destination: null,
+        isExceptional: true,
       };
   }
 };
