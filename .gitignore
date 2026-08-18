@@ -144,6 +144,8 @@ vite.config.ts.timestamp-*
 
 # Local project artifacts
 .DS_Store
+*.swp
+*.swo
 firebase-debug.log
 vite.config.js
 vite.config.d.ts
