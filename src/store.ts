@@ -5,6 +5,7 @@ import type {
   DocumentStatus,
   Metrics,
   PaymentQueueItem,
+  PriorityType,
   Role,
   ServiceType,
   TraceEvent,
@@ -78,6 +79,18 @@ const normalizeData = (data: AppData): AppData => ({
   ...data,
   centers: Object.fromEntries(
     Object.entries(data.centers).map(([centerId, center]) => [centerId, normalizeCenter(center)]),
+  ),
+  cases: Object.fromEntries(
+    Object.entries(data.cases ?? {}).map(([caseId, caseItem]) => [
+      caseId,
+      {
+        ...caseItem,
+        isPriority: caseItem.isPriority ?? false,
+        priorityType: caseItem.priorityType ?? null,
+        priorityCreatedBy: caseItem.priorityCreatedBy ?? null,
+        priorityCreatedAt: caseItem.priorityCreatedAt ?? null,
+      },
+    ]),
   ),
 });
 
@@ -397,6 +410,10 @@ export const createArrival = (data: AppData, serviceType: ServiceType): AppData 
     assignedWindowId: assignedWindow.windowId,
     assignedWindowNumber: assignedWindow.windowNumber,
     assignedOperatorId: null,
+    isPriority: false,
+    priorityType: null,
+    priorityCreatedBy: null,
+    priorityCreatedAt: null,
     currentState: "waiting_document_validation",
     arrivalAt: now,
     calledToWindowAt: null,
@@ -662,6 +679,56 @@ export const markWindowNoShow = (data: AppData, caseId: string, role: Role): App
     "window_no_show",
     role,
   );
+};
+
+export const markCaseAsPriority = (
+  data: AppData,
+  caseId: string,
+  priorityType: PriorityType,
+  role: Role,
+): AppData => {
+  const current = data.cases[caseId];
+  if (
+    !current ||
+    !["operator-window-1", "operator-window-2"].includes(role) ||
+    current.centerId !== data.selectedCenterId ||
+    current.isPriority ||
+    !["called_to_window", "in_document_validation"].includes(current.currentState)
+  ) {
+    return data;
+  }
+
+  const now = Date.now();
+  const nextData: AppData = {
+    ...data,
+    cases: {
+      ...data.cases,
+      [caseId]: {
+        ...current,
+        isPriority: true,
+        priorityType,
+        priorityCreatedBy: role,
+        priorityCreatedAt: now,
+        updatedAt: now,
+      },
+    },
+  };
+
+  return {
+    ...nextData,
+    events: [
+      event(
+        nextData,
+        caseId,
+        role,
+        "priority_created",
+        current.currentState,
+        current.currentState,
+        priorityType,
+      ),
+      ...nextData.events,
+    ],
+  };
 };
 
 export const reassignCase = (

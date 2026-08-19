@@ -23,6 +23,14 @@ export type CaseState =
 
 export type DocumentStatus = "pending" | "approved" | "incomplete" | "rejected";
 
+export type PriorityType =
+  | "older_adult"
+  | "pregnant"
+  | "wheelchair_user"
+  | "disability"
+  | "reduced_mobility"
+  | "other";
+
 export type PaymentQueueState =
   | "waiting_cashier"
   | "reserved"
@@ -131,6 +139,10 @@ export interface CaseRecord {
   assignedWindowId: string;
   assignedWindowNumber: number;
   assignedOperatorId: string | null;
+  isPriority: boolean;
+  priorityType: PriorityType | null;
+  priorityCreatedBy: string | null;
+  priorityCreatedAt: number | null;
   currentState: CaseState;
   arrivalAt: number;
   calledToWindowAt: number | null;

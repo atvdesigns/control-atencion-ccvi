@@ -43,11 +43,14 @@ import {
   Divider,
   FormControl,
   FormControlLabel,
+  FormLabel,
   Grid,
   Grid2,
   LinearProgress,
   MenuItem,
   Paper,
+  Radio,
+  RadioGroup,
   Select,
   Snackbar,
   Stack,
@@ -65,7 +68,7 @@ import {
   getPublicJourneyStep,
   isVisiblePublicCode,
 } from "./publicJourney";
-import type { AppData, CaseRecord, CenterConfig, Metrics, Role, ServiceType, SessionMetadata } from "./types";
+import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, Role, ServiceType, SessionMetadata } from "./types";
 import { ccviBackgroundGradient, ccviPalette } from "./theme";
 import {
   calculateMetrics,
@@ -84,6 +87,7 @@ import {
   getPublicStatusUrl,
   loadData,
   markWindowNoShow,
+  markCaseAsPriority,
   markNoShow,
   pausePayment,
   reassignCase,
@@ -143,7 +147,26 @@ const traceEventLabels: Record<string, string> = {
   payment_resumed: "Atención de caja retomada",
   no_show: "Persona no se presentó en caja",
   case_reassigned: "Turno reasignado de ventanilla",
+  priority_created: "Atención preferencial creada",
 };
+
+const priorityTypeLabels: Record<PriorityType, string> = {
+  older_adult: "Persona mayor",
+  pregnant: "Persona embarazada",
+  wheelchair_user: "Persona usuaria de silla de ruedas",
+  disability: "Persona con discapacidad",
+  reduced_mobility: "Persona con movilidad reducida",
+  other: "Otro caso que requiere prioridad",
+};
+
+const priorityTypeOptions: Array<{ value: PriorityType; label: string }> = [
+  { value: "older_adult", label: "Persona mayor." },
+  { value: "pregnant", label: "Persona embarazada." },
+  { value: "wheelchair_user", label: "Persona usuaria de silla de ruedas." },
+  { value: "disability", label: "Persona con discapacidad." },
+  { value: "reduced_mobility", label: "Persona con movilidad reducida." },
+  { value: "other", label: "Otro caso que requiera prioridad." },
+];
 
 const traceActorLabels: Record<string, string> = {
   kiosk: "Tótem",
@@ -1191,6 +1214,12 @@ const OperatorView = ({
   data: AppData;
   setData: (updater: (data: AppData) => AppData) => void;
 }) => {
+  const [priorityDialogCase, setPriorityDialogCase] = useState<CaseRecord | null>(null);
+  const [selectedPriorityType, setSelectedPriorityType] = useState<PriorityType | "">("");
+  const closePriorityDialog = () => {
+    setPriorityDialogCase(null);
+    setSelectedPriorityType("");
+  };
   const center = getCurrentCenter(data);
   const otherWindows = center.windows.filter(
     (windowItem) => windowItem.enabled && windowItem.windowId !== operatorWindow.windowId,
@@ -1285,6 +1314,23 @@ const OperatorView = ({
             )}
             {activeCase && (
               <CaseCard caseItem={activeCase} center={center} prominent>
+                {activeCase.isPriority && activeCase.priorityType ? (
+                  <Alert severity="info">
+                    <strong>Atención preferencial:</strong>{" "}
+                    {priorityTypeLabels[activeCase.priorityType]}
+                  </Alert>
+                ) : (
+                  <Button
+                    variant="outlined"
+                    onClick={() => {
+                      setPriorityDialogCase(activeCase);
+                      setSelectedPriorityType("");
+                    }}
+                    sx={{ alignSelf: "flex-start" }}
+                  >
+                    Crear atención preferencial
+                  </Button>
+                )}
                 {activeCase.currentState === "called_to_window" && (
                   <Stack spacing={1.5}>
                     <Alert severity="info">
@@ -1451,6 +1497,52 @@ const OperatorView = ({
           </AccordionDetails>
         </Accordion>
       </Stack>
+      <Dialog open={Boolean(priorityDialogCase)} onClose={closePriorityDialog} fullWidth maxWidth="sm">
+        <DialogTitle>Crear atención preferencial</DialogTitle>
+        <DialogContent>
+          <FormControl sx={{ mt: 1, width: "100%" }}>
+            <FormLabel id="priority-type-label">
+              Seleccione el motivo por el que esta atención requiere prioridad.
+            </FormLabel>
+            <RadioGroup
+              aria-labelledby="priority-type-label"
+              value={selectedPriorityType}
+              onChange={(event) => setSelectedPriorityType(event.target.value as PriorityType)}
+              sx={{ mt: 1 }}
+            >
+              {priorityTypeOptions.map((option) => (
+                <FormControlLabel
+                  key={option.value}
+                  value={option.value}
+                  control={<Radio />}
+                  label={option.label}
+                />
+              ))}
+            </RadioGroup>
+          </FormControl>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closePriorityDialog}>Cancelar</Button>
+          <Button
+            variant="contained"
+            disabled={!selectedPriorityType || !priorityDialogCase}
+            onClick={() => {
+              if (!priorityDialogCase || !selectedPriorityType) return;
+              setData((currentData) =>
+                markCaseAsPriority(
+                  currentData,
+                  priorityDialogCase.caseId,
+                  selectedPriorityType,
+                  role,
+                ),
+              );
+              closePriorityDialog();
+            }}
+          >
+            Crear atención preferencial
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Page>
   );
 };
