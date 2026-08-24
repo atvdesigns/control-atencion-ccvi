@@ -81,6 +81,8 @@ import {
   formatServiceHours,
   formatDuration,
   getAccessiblePublicCode,
+  formatPublicTicketLabel,
+  getAccessiblePublicTicketLabel,
   getCurrentCenter,
   getCurrentSession,
   isCenterOpenForTickets,
@@ -88,12 +90,14 @@ import {
   loadData,
   markWindowNoShow,
   markCaseAsPriority,
+  removeCasePriority,
   markNoShow,
   pausePayment,
   reassignCase,
   resumePausedPayment,
   roleLabels,
   saveData,
+  updateCasePriority,
   selectCenter,
   serviceLabels,
   startCashierAttention,
@@ -148,6 +152,8 @@ const traceEventLabels: Record<string, string> = {
   no_show: "Persona no se presentó en caja",
   case_reassigned: "Turno reasignado de ventanilla",
   priority_created: "Atención preferencial creada",
+  priority_updated: "Motivo de atención preferencial actualizado",
+  priority_removed: "Atención preferencial quitada",
 };
 
 const priorityTypeLabels: Record<PriorityType, string> = {
@@ -809,6 +815,7 @@ const CaseCard = ({
   prominent = false,
   compact = false,
   processed = false,
+  showPriorityLabel = false,
 }: {
   caseItem: CaseRecord;
   center: CenterConfig;
@@ -816,6 +823,7 @@ const CaseCard = ({
   prominent?: boolean;
   compact?: boolean;
   processed?: boolean;
+  showPriorityLabel?: boolean;
 }) => {
   const statusColor = statusColors[caseItem.currentState] ?? ccviPalette.warmGray;
   const cashierLabel = caseItem.cashierId?.replace("cashier", "Caja ");
@@ -850,10 +858,16 @@ const CaseCard = ({
               </Typography>
               <Typography
                 variant={codeVariant}
-                aria-label={getAccessiblePublicCode(caseItem.publicCode)}
+                aria-label={
+                  showPriorityLabel
+                    ? getAccessiblePublicTicketLabel(caseItem.publicCode, caseItem.isPriority)
+                    : getAccessiblePublicCode(caseItem.publicCode)
+                }
                 sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 0.95 }}
               >
-                {caseItem.publicCode}
+                {showPriorityLabel
+                  ? formatPublicTicketLabel(caseItem.publicCode, caseItem.isPriority)
+                  : caseItem.publicCode}
               </Typography>
             </Stack>
             <Stack
@@ -1215,6 +1229,7 @@ const OperatorView = ({
   setData: (updater: (data: AppData) => AppData) => void;
 }) => {
   const [priorityDialogCase, setPriorityDialogCase] = useState<CaseRecord | null>(null);
+  const [priorityRemovalCase, setPriorityRemovalCase] = useState<CaseRecord | null>(null);
   const [selectedPriorityType, setSelectedPriorityType] = useState<PriorityType | "">("");
   const closePriorityDialog = () => {
     setPriorityDialogCase(null);
@@ -1313,12 +1328,23 @@ const OperatorView = ({
               </Stack>
             )}
             {activeCase && (
-              <CaseCard caseItem={activeCase} center={center} prominent>
+              <CaseCard caseItem={activeCase} center={center} prominent showPriorityLabel>
                 {activeCase.isPriority && activeCase.priorityType ? (
-                  <Alert severity="info">
-                    <strong>Atención preferencial:</strong>{" "}
-                    {priorityTypeLabels[activeCase.priorityType]}
-                  </Alert>
+                  <Stack spacing={1} alignItems="flex-start">
+                    <Alert severity="info" sx={{ width: "100%" }}>
+                      <strong>Atención preferencial:</strong>{" "}
+                      {priorityTypeLabels[activeCase.priorityType]}
+                    </Alert>
+                    <Button
+                      variant="outlined"
+                      onClick={() => {
+                        setPriorityDialogCase(activeCase);
+                        setSelectedPriorityType(activeCase.priorityType ?? "");
+                      }}
+                    >
+                      Gestionar atención preferencial
+                    </Button>
+                  </Stack>
                 ) : (
                   <Button
                     variant="outlined"
@@ -1460,7 +1486,7 @@ const OperatorView = ({
               )}
               {waitingCases.map((caseItem) => (
                 <Grid2 size={{ xs: 12 }} key={caseItem.caseId}>
-                  <CaseCard caseItem={caseItem} center={center} />
+                  <CaseCard caseItem={caseItem} center={center} showPriorityLabel />
                 </Grid2>
               ))}
             </Grid2>
@@ -1490,7 +1516,7 @@ const OperatorView = ({
               )}
               {processed.map((caseItem) => (
                 <Grid2 size={{ xs: 12, md: 6 }} key={caseItem.caseId}>
-                  <CaseCard caseItem={caseItem} center={center} processed />
+                  <CaseCard caseItem={caseItem} center={center} processed showPriorityLabel />
                 </Grid2>
               ))}
             </Grid2>
@@ -1498,11 +1524,23 @@ const OperatorView = ({
         </Accordion>
       </Stack>
       <Dialog open={Boolean(priorityDialogCase)} onClose={closePriorityDialog} fullWidth maxWidth="sm">
-        <DialogTitle>Crear atención preferencial</DialogTitle>
+        <DialogTitle>
+          {priorityDialogCase?.isPriority ? "Atención preferencial" : "Crear atención preferencial"}
+        </DialogTitle>
         <DialogContent>
+          {priorityDialogCase?.isPriority && priorityDialogCase.priorityType && (
+            <Stack spacing={0.75} sx={{ mt: 1, mb: 2 }}>
+              <Typography>Este turno está registrado como atención preferencial.</Typography>
+              <Typography color="text.secondary">
+                Motivo actual: {priorityTypeLabels[priorityDialogCase.priorityType]}.
+              </Typography>
+            </Stack>
+          )}
           <FormControl sx={{ mt: 1, width: "100%" }}>
             <FormLabel id="priority-type-label">
-              Seleccione el motivo por el que esta atención requiere prioridad.
+              {priorityDialogCase?.isPriority
+                ? "Cambiar motivo"
+                : "Seleccione el motivo por el que esta atención requiere prioridad."}
             </FormLabel>
             <RadioGroup
               aria-labelledby="priority-type-label"
@@ -1523,23 +1561,76 @@ const OperatorView = ({
         </DialogContent>
         <DialogActions>
           <Button onClick={closePriorityDialog}>Cancelar</Button>
+          {priorityDialogCase?.isPriority && (
+            <Button
+              color="error"
+              variant="outlined"
+              onClick={() => {
+                setPriorityRemovalCase(priorityDialogCase);
+                closePriorityDialog();
+              }}
+            >
+              Quitar atención preferencial
+            </Button>
+          )}
           <Button
             variant="contained"
-            disabled={!selectedPriorityType || !priorityDialogCase}
+            disabled={
+              !selectedPriorityType ||
+              !priorityDialogCase ||
+              (priorityDialogCase.isPriority &&
+                priorityDialogCase.priorityType === selectedPriorityType)
+            }
             onClick={() => {
               if (!priorityDialogCase || !selectedPriorityType) return;
               setData((currentData) =>
-                markCaseAsPriority(
-                  currentData,
-                  priorityDialogCase.caseId,
-                  selectedPriorityType,
-                  role,
-                ),
+                priorityDialogCase.isPriority
+                  ? updateCasePriority(
+                      currentData,
+                      priorityDialogCase.caseId,
+                      selectedPriorityType,
+                      role,
+                    )
+                  : markCaseAsPriority(
+                      currentData,
+                      priorityDialogCase.caseId,
+                      selectedPriorityType,
+                      role,
+                    ),
               );
               closePriorityDialog();
             }}
           >
-            Crear atención preferencial
+            {priorityDialogCase?.isPriority
+              ? "Cambiar motivo"
+              : "Crear atención preferencial"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={Boolean(priorityRemovalCase)}
+        onClose={() => setPriorityRemovalCase(null)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Quitar atención preferencial</DialogTitle>
+        <DialogContent>
+          <Typography>Este turno volverá a tratarse como una atención regular.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPriorityRemovalCase(null)}>Cancelar</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              if (!priorityRemovalCase) return;
+              setData((currentData) =>
+                removeCasePriority(currentData, priorityRemovalCase.caseId, role),
+              );
+              setPriorityRemovalCase(null);
+            }}
+          >
+            Quitar atención preferencial
           </Button>
         </DialogActions>
       </Dialog>
@@ -1709,7 +1800,7 @@ const CashierView = ({
                   </Card>
                 </Box>
               ) : (
-                <CaseCard caseItem={activeCase} center={center} prominent>
+                <CaseCard caseItem={activeCase} center={center} prominent showPriorityLabel>
                   <Alert severity="info">
                     Retirar carpeta <strong>{active.folderCode}</strong> del punto físico compartido.
                   </Alert>
@@ -1784,7 +1875,7 @@ const CashierView = ({
 
                   return (
                     <Grid item xs={12} md={6} key={item.queueItemId}>
-                      <CaseCard caseItem={pausedCase} center={center} compact>
+                      <CaseCard caseItem={pausedCase} center={center} compact showPriorityLabel>
                         <Alert severity="warning">
                           El pago no fue completado. Retome este turno cuando la persona pueda continuar en caja.
                         </Alert>
@@ -2005,10 +2096,13 @@ const DisplayPanel = ({
                   </Typography>
                   <Typography
                     variant="h2"
-                    aria-label={getAccessiblePublicCode(caseItem.publicCode)}
+                    aria-label={getAccessiblePublicTicketLabel(
+                      caseItem.publicCode,
+                      caseItem.isPriority,
+                    )}
                     sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1 }}
                   >
-                    {caseItem.publicCode}
+                    {formatPublicTicketLabel(caseItem.publicCode, caseItem.isPriority)}
                   </Typography>
                 </Grid>
                 <Grid

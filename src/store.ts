@@ -26,6 +26,18 @@ const DEFAULT_SERVICE_START_TIME = "08:00";
 const DEFAULT_SERVICE_END_TIME = "17:00";
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+export interface DocumentaryPriorityPolicy {
+  maxConsecutivePriorityCases: number;
+}
+
+export const DEFAULT_DOCUMENTARY_PRIORITY_POLICY: DocumentaryPriorityPolicy = {
+  maxConsecutivePriorityCases: 2,
+};
+
+export const DEFAULT_CASHIER_PRIORITY_POLICY: DocumentaryPriorityPolicy = {
+  maxConsecutivePriorityCases: 2,
+};
+
 const pad = (value: number, length = 3) => String(value).padStart(length, "0");
 
 const suffix = () => Math.random().toString(36).slice(2, 4).toUpperCase();
@@ -92,6 +104,16 @@ const normalizeData = (data: AppData): AppData => ({
       },
     ]),
   ),
+  sessions: Object.fromEntries(
+    Object.entries(data.sessions ?? {}).map(([sessionId, session]) => [
+      sessionId,
+      {
+        ...session,
+        consecutivePriorityCasesByWindow: session.consecutivePriorityCasesByWindow ?? {},
+        consecutivePriorityCasesForCashier: session.consecutivePriorityCasesForCashier ?? 0,
+      },
+    ]),
+  ),
 });
 
 export const formatPublicCode = (windowNumber: number, sequence: number): string => {
@@ -116,6 +138,12 @@ export const getAccessiblePublicCode = (publicCode: string) => {
     .map((digit) => (digit === "0" ? "cero" : digit))
     .join(" ")}`;
 };
+
+export const formatPublicTicketLabel = (publicCode: string, isPriority: boolean) =>
+  `${publicCode}${isPriority ? " P" : ""}`;
+
+export const getAccessiblePublicTicketLabel = (publicCode: string, isPriority: boolean) =>
+  `Turno ${publicCode}${isPriority ? ", atención preferencial" : ""}`;
 
 export const serviceLabels: Record<ServiceType, string> = {
   representation: "Representación, empresa o poder notarial",
@@ -261,6 +289,8 @@ export const createInitialData = (): AppData => {
         status: "open",
         nextGlobalArrivalSequence: 1,
         windowSequences: windowSequencesFor(center),
+        consecutivePriorityCasesByWindow: {},
+        consecutivePriorityCasesForCashier: 0,
         nextFolderNumber: 1,
         nextPaymentQueueNumber: 1,
         openedAt: Date.now(),
@@ -294,8 +324,14 @@ export const ensureSession = (data: AppData): AppData => {
         existing.windowSequences?.[windowItem.windowId] ===
         normalizedSequences[windowItem.windowId],
     );
+    const priorityCountersAreCurrent = Boolean(existing.consecutivePriorityCasesByWindow);
+    const cashierPriorityCounterIsCurrent = Number.isInteger(
+      existing.consecutivePriorityCasesForCashier,
+    );
 
-    if (sequencesAreCurrent) return data;
+    if (sequencesAreCurrent && priorityCountersAreCurrent && cashierPriorityCounterIsCurrent) {
+      return data;
+    }
 
     return {
       ...data,
@@ -304,6 +340,8 @@ export const ensureSession = (data: AppData): AppData => {
         [sessionId]: {
           ...existing,
           windowSequences: normalizedSequences,
+          consecutivePriorityCasesByWindow: existing.consecutivePriorityCasesByWindow ?? {},
+          consecutivePriorityCasesForCashier: existing.consecutivePriorityCasesForCashier ?? 0,
         },
       },
     };
@@ -320,6 +358,8 @@ export const ensureSession = (data: AppData): AppData => {
         status: "open",
         nextGlobalArrivalSequence: 1,
         windowSequences: windowSequencesFor(center),
+        consecutivePriorityCasesByWindow: {},
+        consecutivePriorityCasesForCashier: 0,
         nextFolderNumber: 1,
         nextPaymentQueueNumber: 1,
         openedAt: Date.now(),
@@ -624,15 +664,44 @@ const transitionCase = (
   };
 };
 
-export const nextOperatorCase = (data: AppData, windowId: string) =>
-  Object.values(data.cases)
+const documentaryFifo = (a: CaseRecord, b: CaseRecord) =>
+  a.arrivalAt - b.arrivalAt ||
+  a.globalArrivalSequence - b.globalArrivalSequence ||
+  a.caseId.localeCompare(b.caseId);
+
+const priorityLimit = (policy: DocumentaryPriorityPolicy) =>
+  clampInteger(policy.maxConsecutivePriorityCases, 1, 100, 2);
+
+export const nextOperatorCase = (
+  data: AppData,
+  windowId: string,
+  policy: DocumentaryPriorityPolicy = DEFAULT_DOCUMENTARY_PRIORITY_POLICY,
+) => {
+  const sessionId = getSessionId(data);
+  const eligibleCases = Object.values(data.cases)
     .filter(
       (caseItem) =>
         caseItem.centerId === data.selectedCenterId &&
+        caseItem.sessionId === sessionId &&
         caseItem.assignedWindowId === windowId &&
         caseItem.currentState === "waiting_document_validation",
     )
-    .sort((a, b) => a.arrivalAt - b.arrivalAt)[0];
+    .sort(documentaryFifo);
+
+  const priorityCases = eligibleCases.filter((caseItem) => caseItem.isPriority);
+  const regularCases = eligibleCases.filter((caseItem) => !caseItem.isPriority);
+  const consecutivePriorityCases =
+    data.sessions[sessionId]?.consecutivePriorityCasesByWindow?.[windowId] ?? 0;
+
+  if (
+    priorityCases.length > 0 &&
+    (regularCases.length === 0 || consecutivePriorityCases < priorityLimit(policy))
+  ) {
+    return priorityCases[0];
+  }
+
+  return regularCases[0] ?? priorityCases[0];
+};
 
 export const callNextForOperator = (data: AppData, windowId: string, role: Role): AppData => {
   const active = Object.values(data.cases).some(
@@ -646,8 +715,26 @@ export const callNextForOperator = (data: AppData, windowId: string, role: Role)
   const next = nextOperatorCase(data, windowId);
   if (!next) return data;
 
+  const sessionId = getSessionId(data);
+  const session = data.sessions[sessionId];
+  const previousPriorityCount = session.consecutivePriorityCasesByWindow?.[windowId] ?? 0;
+  const nextPriorityCount = next.isPriority ? previousPriorityCount + 1 : 0;
+  const dataWithPriorityCount: AppData = {
+    ...data,
+    sessions: {
+      ...data.sessions,
+      [sessionId]: {
+        ...session,
+        consecutivePriorityCasesByWindow: {
+          ...session.consecutivePriorityCasesByWindow,
+          [windowId]: nextPriorityCount,
+        },
+      },
+    },
+  };
+
   return transitionCase(
-    data,
+    dataWithPriorityCount,
     next.caseId,
     { currentState: "called_to_window", calledToWindowAt: Date.now() },
     "called_to_window",
@@ -725,6 +812,99 @@ export const markCaseAsPriority = (
         current.currentState,
         current.currentState,
         priorityType,
+      ),
+      ...nextData.events,
+    ],
+  };
+};
+
+export const updateCasePriority = (
+  data: AppData,
+  caseId: string,
+  priorityType: PriorityType,
+  role: Role,
+): AppData => {
+  const current = data.cases[caseId];
+  if (
+    !current ||
+    !["operator-window-1", "operator-window-2"].includes(role) ||
+    current.centerId !== data.selectedCenterId ||
+    !current.isPriority ||
+    current.priorityType === priorityType ||
+    !["called_to_window", "in_document_validation"].includes(current.currentState)
+  ) {
+    return data;
+  }
+
+  const nextData: AppData = {
+    ...data,
+    cases: {
+      ...data.cases,
+      [caseId]: {
+        ...current,
+        priorityType,
+        updatedAt: Date.now(),
+      },
+    },
+  };
+
+  return {
+    ...nextData,
+    events: [
+      event(
+        nextData,
+        caseId,
+        role,
+        "priority_updated",
+        current.currentState,
+        current.currentState,
+        priorityType,
+      ),
+      ...nextData.events,
+    ],
+  };
+};
+
+export const removeCasePriority = (
+  data: AppData,
+  caseId: string,
+  role: Role,
+): AppData => {
+  const current = data.cases[caseId];
+  if (
+    !current ||
+    !["operator-window-1", "operator-window-2"].includes(role) ||
+    current.centerId !== data.selectedCenterId ||
+    !current.isPriority ||
+    !["called_to_window", "in_document_validation"].includes(current.currentState)
+  ) {
+    return data;
+  }
+
+  const nextData: AppData = {
+    ...data,
+    cases: {
+      ...data.cases,
+      [caseId]: {
+        ...current,
+        isPriority: false,
+        priorityType: null,
+        updatedAt: Date.now(),
+      },
+    },
+  };
+
+  return {
+    ...nextData,
+    events: [
+      event(
+        nextData,
+        caseId,
+        role,
+        "priority_removed",
+        current.currentState,
+        current.currentState,
+        current.priorityType ?? undefined,
       ),
       ...nextData.events,
     ],
@@ -852,6 +1032,47 @@ export const finishDocumentValidation = (
   };
 };
 
+const cashierFifo = (a: PaymentQueueItem, b: PaymentQueueItem) =>
+  a.approvedAt - b.approvedAt ||
+  a.queueNumber - b.queueNumber ||
+  a.queueItemId.localeCompare(b.queueItemId);
+
+export const nextCashierQueueItem = (
+  data: AppData,
+  policy: DocumentaryPriorityPolicy = DEFAULT_CASHIER_PRIORITY_POLICY,
+) => {
+  const sessionId = getSessionId(data);
+  const eligibleItems = Object.values(data.paymentQueue)
+    .filter((item) => {
+      const relatedCase = data.cases[item.caseId];
+      return (
+        item.centerId === data.selectedCenterId &&
+        item.sessionId === sessionId &&
+        item.state === "waiting_cashier" &&
+        relatedCase?.currentState === "waiting_cashier"
+      );
+    })
+    .sort(cashierFifo);
+
+  const priorityItems = eligibleItems.filter(
+    (item) => data.cases[item.caseId]?.isPriority === true,
+  );
+  const regularItems = eligibleItems.filter(
+    (item) => data.cases[item.caseId]?.isPriority !== true,
+  );
+  const consecutivePriorityCases =
+    data.sessions[sessionId]?.consecutivePriorityCasesForCashier ?? 0;
+
+  if (
+    priorityItems.length > 0 &&
+    (regularItems.length === 0 || consecutivePriorityCases < priorityLimit(policy))
+  ) {
+    return priorityItems[0];
+  }
+
+  return regularItems[0] ?? priorityItems[0];
+};
+
 export const callNextForCashier = (data: AppData, cashierId: string): AppData => {
   const active = Object.values(data.paymentQueue).find(
     (item) =>
@@ -861,13 +1082,17 @@ export const callNextForCashier = (data: AppData, cashierId: string): AppData =>
   );
   if (active) return data;
 
-  const next = Object.values(data.paymentQueue)
-    .filter((item) => item.centerId === data.selectedCenterId && item.state === "waiting_cashier")
-    .sort((a, b) => a.approvedAt - b.approvedAt)[0];
+  const next = nextCashierQueueItem(data);
   if (!next) return data;
 
   const now = Date.now();
   const relatedCase = data.cases[next.caseId];
+  const sessionId = getSessionId(data);
+  const session = data.sessions[sessionId];
+  if (!relatedCase || !session) return data;
+  const nextPriorityCount = relatedCase.isPriority
+    ? session.consecutivePriorityCasesForCashier + 1
+    : 0;
   const updatedQueue: PaymentQueueItem = {
     ...next,
     state: "called_to_cashier",
@@ -885,6 +1110,13 @@ export const callNextForCashier = (data: AppData, cashierId: string): AppData =>
   };
   const nextData: AppData = {
     ...data,
+    sessions: {
+      ...data.sessions,
+      [sessionId]: {
+        ...session,
+        consecutivePriorityCasesForCashier: nextPriorityCount,
+      },
+    },
     cases: { ...data.cases, [relatedCase.caseId]: updatedCase },
     paymentQueue: { ...data.paymentQueue, [next.queueItemId]: updatedQueue },
   };

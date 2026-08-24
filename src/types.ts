@@ -118,6 +118,8 @@ export interface SessionMetadata {
   status: "open" | "closed";
   nextGlobalArrivalSequence: number;
   windowSequences: Record<string, number>;
+  consecutivePriorityCasesByWindow: Record<string, number>;
+  consecutivePriorityCasesForCashier: number;
   nextFolderNumber: number;
   nextPaymentQueueNumber: number;
   openedAt: number;
