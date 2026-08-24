@@ -55,6 +55,12 @@ import {
   Snackbar,
   Stack,
   Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   TextField,
   Toolbar,
   Typography,
@@ -2151,6 +2157,82 @@ const AdminView = ({
   const [selectedMetricsSessionId, setSelectedMetricsSessionId] = useState(session.sessionId);
   const selectedMetricsSession = data.sessions[selectedMetricsSessionId] ?? session;
   const metrics = calculateMetrics(data, selectedMetricsSession.sessionId);
+  const cashierPerformance = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        cashierId: string;
+        cashierName: string;
+        completedCount: number;
+        durations: number[];
+        commissionRates: number[];
+        commissionAmounts: number[];
+      }
+    >();
+
+    Object.values(data.cases)
+      .filter(
+        (caseItem) =>
+          caseItem.centerId === center.centerId &&
+          caseItem.sessionId === selectedMetricsSession.sessionId &&
+          caseItem.currentState === "completed" &&
+          caseItem.cashierId,
+      )
+      .forEach((caseItem) => {
+        const cashierId = caseItem.cashierId as string;
+        const cashierName = caseItem.cashierNameAtCompletion?.trim() || "Sin cajera/o asignado";
+        const key = `${cashierId}::${cashierName}`;
+        const group = groups.get(key) ?? {
+          cashierId,
+          cashierName,
+          completedCount: 0,
+          durations: [],
+          commissionRates: [],
+          commissionAmounts: [],
+        };
+
+        group.completedCount += 1;
+        if (typeof caseItem.cashierDurationMs === "number" && caseItem.cashierDurationMs >= 0) {
+          group.durations.push(caseItem.cashierDurationMs);
+        }
+        if (typeof caseItem.commissionRateApplied === "number") {
+          group.commissionRates.push(caseItem.commissionRateApplied);
+        }
+        if (typeof caseItem.commissionAmount === "number") {
+          group.commissionAmounts.push(caseItem.commissionAmount);
+        }
+        groups.set(key, group);
+      });
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        averageDurationMs:
+          group.durations.length > 0
+            ? group.durations.reduce((total, duration) => total + duration, 0) / group.durations.length
+            : undefined,
+        uniqueCommissionRates: Array.from(new Set(group.commissionRates)),
+        totalCommission:
+          group.commissionAmounts.length > 0
+            ? group.commissionAmounts.reduce((total, amount) => total + amount, 0)
+            : undefined,
+      }))
+      .sort(
+        (a, b) =>
+          b.completedCount - a.completedCount ||
+          a.cashierName.localeCompare(b.cashierName, "es"),
+      );
+  }, [center.centerId, data.cases, selectedMetricsSession.sessionId]);
+  const clpFormatter = useMemo(
+    () => new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }),
+    [],
+  );
+  const formatCashierDuration = (milliseconds: number) => {
+    const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes} min ${seconds} s`;
+  };
   const [open, setOpen] = useState(false);
   const [editingCenterId, setEditingCenterId] = useState<string | null>(null);
   const [deletingCenterId, setDeletingCenterId] = useState<string | null>(null);
@@ -2267,6 +2349,57 @@ const AdminView = ({
                 <MetricCard label="Prom. ciclo total" value={formatDuration(metrics.averageEndToEndMs)} />
               </Grid>
             </Grid>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <SectionTitle icon={<Payments />} title="Rendimiento de cajas" />
+            {cashierPerformance.length === 0 ? (
+              <Typography color="text.secondary" sx={{ mt: 2 }}>
+                No hay atenciones completadas para mostrar.
+              </Typography>
+            ) : (
+              <TableContainer component={Paper} variant="outlined" sx={{ mt: 2 }}>
+                <Table aria-label="Rendimiento de cajas y cajeras">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Cajera/o</TableCell>
+                      <TableCell>Caja</TableCell>
+                      <TableCell align="right">Atenciones</TableCell>
+                      <TableCell align="right">Tiempo promedio</TableCell>
+                      <TableCell align="right">Bono por atención</TableCell>
+                      <TableCell align="right">Bono total</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {cashierPerformance.map((item) => (
+                      <TableRow key={`${item.cashierId}-${item.cashierName}`}>
+                        <TableCell>{item.cashierName}</TableCell>
+                        <TableCell>{item.cashierId.replace(/^cashier/i, "Caja ")}</TableCell>
+                        <TableCell align="right">{item.completedCount}</TableCell>
+                        <TableCell align="right">
+                          {item.averageDurationMs === undefined
+                            ? "Sin configurar"
+                            : formatCashierDuration(item.averageDurationMs)}
+                        </TableCell>
+                        <TableCell align="right">
+                          {item.uniqueCommissionRates.length === 0
+                            ? "Sin configurar"
+                            : item.uniqueCommissionRates.length === 1
+                              ? clpFormatter.format(item.uniqueCommissionRates[0])
+                              : "Variable"}
+                        </TableCell>
+                        <TableCell align="right">
+                          {item.totalCommission === undefined
+                            ? "Sin configurar"
+                            : clpFormatter.format(item.totalCommission)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
           </CardContent>
         </Card>
         <Grid container spacing={3} alignItems="stretch">
