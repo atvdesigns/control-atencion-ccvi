@@ -219,7 +219,12 @@ const metricsRows = (metrics: Metrics) => [
 
 const safeFileName = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
-const escapeCsv = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+const escapeCsv = (value: string | number) => {
+  const text = String(value);
+  const formulaSafeText = /^\s*[=+\-@]/.test(text) ? `'${text}` : text;
+
+  return `"${formulaSafeText.replace(/"/g, '""')}"`;
+};
 
 const escapeHtml = (value: string | number) =>
   String(value)
@@ -393,6 +398,37 @@ const downloadMetricsCsv = (center: CenterConfig, session: SessionMetadata, metr
   const link = document.createElement("a");
   link.href = url;
   link.download = `metricas-${safeFileName(center.shortCode)}-${session.date}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
+const downloadRejectedUsersCsv = (
+  rejectedUsers: CaseRecord[],
+  rejectedAtFormatter: Intl.DateTimeFormat,
+) => {
+  const rows: Array<Array<string | number>> = [
+    ["Fecha", "Número de atención", "Ventanilla", "Nombre y apellido", "Teléfono"],
+    ...rejectedUsers.map((caseItem) => [
+      rejectedAtFormatter.format(caseItem.documentValidationCompletedAt as number),
+      caseItem.publicCode,
+      `Ventanilla ${caseItem.assignedWindowNumber}`,
+      caseItem.rejectedCustomerName?.trim() || "Sin registrar",
+      caseItem.rejectedCustomerPhone?.trim() || "Sin registrar",
+    ]),
+  ];
+  const csv = rows.map((row) => row.map(escapeCsv).join(";")).join("\n");
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const today = new Date();
+  const dateLabel = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0"),
+  ].join("-");
+
+  link.href = url;
+  link.download = `ccvi-usuarios-rechazados-${dateLabel}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 };
@@ -1239,9 +1275,17 @@ const OperatorView = ({
   const [priorityDialogCase, setPriorityDialogCase] = useState<CaseRecord | null>(null);
   const [priorityRemovalCase, setPriorityRemovalCase] = useState<CaseRecord | null>(null);
   const [selectedPriorityType, setSelectedPriorityType] = useState<PriorityType | "">("");
+  const [rejectionDialogCase, setRejectionDialogCase] = useState<CaseRecord | null>(null);
+  const [rejectedCustomerName, setRejectedCustomerName] = useState("");
+  const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
   const closePriorityDialog = () => {
     setPriorityDialogCase(null);
     setSelectedPriorityType("");
+  };
+  const closeRejectionDialog = () => {
+    setRejectionDialogCase(null);
+    setRejectedCustomerName("");
+    setRejectedCustomerPhone("");
   };
   const center = getCurrentCenter(data);
   const otherWindows = center.windows.filter(
@@ -1424,11 +1468,7 @@ const OperatorView = ({
                       <Button
                         variant="outlined"
                         color="error"
-                        onClick={() =>
-                          setData((currentData) =>
-                            finishDocumentValidation(currentData, activeCase.caseId, "rejected", role),
-                          )
-                        }
+                        onClick={() => setRejectionDialogCase(activeCase)}
                       >
                         Rechazar
                       </Button>
@@ -1639,6 +1679,60 @@ const OperatorView = ({
             }}
           >
             Quitar atención preferencial
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={Boolean(rejectionDialogCase)} onClose={closeRejectionDialog} fullWidth maxWidth="sm">
+        <DialogTitle>Registrar contacto</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography>
+              Estos datos permitirán contactar a la persona si es necesario.
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Ambos campos son opcionales. Puede continuar aunque la persona no entregue estos datos.
+            </Typography>
+            <TextField
+              label="Nombre y apellido"
+              value={rejectedCustomerName}
+              onChange={(event) => setRejectedCustomerName(event.target.value)}
+              autoComplete="name"
+              fullWidth
+            />
+            <TextField
+              label="Teléfono de contacto"
+              type="tel"
+              value={rejectedCustomerPhone}
+              onChange={(event) => setRejectedCustomerPhone(event.target.value)}
+              helperText="Ejemplo: +56 9 1234 5678"
+              autoComplete="tel"
+              fullWidth
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={closeRejectionDialog}>Cancelar</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => {
+              if (!rejectionDialogCase) return;
+              setData((currentData) =>
+                finishDocumentValidation(
+                  currentData,
+                  rejectionDialogCase.caseId,
+                  "rejected",
+                  role,
+                  {
+                    customerName: rejectedCustomerName,
+                    customerPhone: rejectedCustomerPhone,
+                  },
+                ),
+              );
+              closeRejectionDialog();
+            }}
+          >
+            Guardar y rechazar
           </Button>
         </DialogActions>
       </Dialog>
@@ -2158,6 +2252,7 @@ const AdminView = ({
     .sort((a, b) => b.date.localeCompare(a.date));
   const [selectedMetricsSessionId, setSelectedMetricsSessionId] = useState(session.sessionId);
   const [cashierPerformancePeriod, setCashierPerformancePeriod] = useState<"today" | "week" | "month">("today");
+  const [rejectedUsersPeriod, setRejectedUsersPeriod] = useState<"today" | "week" | "month" | "year">("today");
   const selectedMetricsSession = data.sessions[selectedMetricsSessionId] ?? session;
   const metrics = calculateMetrics(data, selectedMetricsSession.sessionId);
   const cashierPerformance = useMemo(() => {
@@ -2246,6 +2341,51 @@ const AdminView = ({
   }, [cashierPerformancePeriod, center.centerId, data.cases]);
   const clpFormatter = useMemo(
     () => new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }),
+    [],
+  );
+  const rejectedUsers = useMemo(() => {
+    const now = new Date();
+    const periodStart = new Date(now);
+
+    if (rejectedUsersPeriod === "today") {
+      periodStart.setHours(0, 0, 0, 0);
+    } else if (rejectedUsersPeriod === "week") {
+      const daysSinceMonday = (periodStart.getDay() + 6) % 7;
+      periodStart.setDate(periodStart.getDate() - daysSinceMonday);
+      periodStart.setHours(0, 0, 0, 0);
+    } else if (rejectedUsersPeriod === "month") {
+      periodStart.setDate(1);
+      periodStart.setHours(0, 0, 0, 0);
+    } else {
+      periodStart.setMonth(0, 1);
+      periodStart.setHours(0, 0, 0, 0);
+    }
+
+    const periodStartTimestamp = periodStart.getTime();
+    const nowTimestamp = now.getTime();
+
+    return Object.values(data.cases)
+      .filter(
+        (caseItem) =>
+          caseItem.centerId === center.centerId &&
+          caseItem.currentState === "rejected" &&
+          caseItem.documentStatus === "rejected" &&
+          typeof caseItem.documentValidationCompletedAt === "number" &&
+          caseItem.documentValidationCompletedAt >= periodStartTimestamp &&
+          caseItem.documentValidationCompletedAt <= nowTimestamp,
+      )
+      .sort(
+        (a, b) =>
+          (b.documentValidationCompletedAt as number) -
+          (a.documentValidationCompletedAt as number),
+      );
+  }, [center.centerId, data.cases, rejectedUsersPeriod]);
+  const rejectedAtFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat("es-CL", {
+        dateStyle: "short",
+        timeStyle: "short",
+      }),
     [],
   );
   const formatCashierDuration = (milliseconds: number) => {
@@ -2428,6 +2568,75 @@ const AdminView = ({
                             ? "Sin configurar"
                             : clpFormatter.format(item.totalCommission)}
                         </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent>
+            <SectionTitle icon={<Person />} title="Usuarios rechazados" />
+            <Typography color="text.secondary" sx={{ mt: 1 }}>
+              Personas cuyo trámite no pudo continuar y cuyos datos de contacto fueron registrados durante la atención.
+            </Typography>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={2}
+              alignItems={{ xs: "stretch", sm: "center" }}
+              sx={{ mt: 2 }}
+            >
+              <ToggleButtonGroup
+                value={rejectedUsersPeriod}
+                exclusive
+                onChange={(_event, period: "today" | "week" | "month" | "year" | null) => {
+                  if (period) setRejectedUsersPeriod(period);
+                }}
+                aria-label="Período de usuarios rechazados"
+              >
+                <ToggleButton value="today">Hoy</ToggleButton>
+                <ToggleButton value="week">Semana</ToggleButton>
+                <ToggleButton value="month">Mes</ToggleButton>
+                <ToggleButton value="year">Año</ToggleButton>
+              </ToggleButtonGroup>
+              <Button
+                variant="outlined"
+                startIcon={<FileDownload />}
+                disabled={rejectedUsers.length === 0}
+                onClick={() => downloadRejectedUsersCsv(rejectedUsers, rejectedAtFormatter)}
+                sx={{ minHeight: 48 }}
+              >
+                Descargar CSV
+              </Button>
+            </Stack>
+            {rejectedUsers.length === 0 ? (
+              <Typography color="text.secondary" sx={{ mt: 2 }}>
+                No hay usuarios rechazados para mostrar en este período.
+              </Typography>
+            ) : (
+              <TableContainer component={Paper} variant="outlined" sx={{ mt: 2, overflowX: "auto" }}>
+                <Table aria-label="Usuarios rechazados" sx={{ minWidth: 720 }}>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Fecha</TableCell>
+                      <TableCell>Número de atención</TableCell>
+                      <TableCell>Ventanilla</TableCell>
+                      <TableCell>Nombre y apellido</TableCell>
+                      <TableCell>Teléfono</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {rejectedUsers.map((caseItem) => (
+                      <TableRow key={caseItem.caseId}>
+                        <TableCell>
+                          {rejectedAtFormatter.format(caseItem.documentValidationCompletedAt as number)}
+                        </TableCell>
+                        <TableCell>{caseItem.publicCode}</TableCell>
+                        <TableCell>Ventanilla {caseItem.assignedWindowNumber}</TableCell>
+                        <TableCell>{caseItem.rejectedCustomerName?.trim() || "Sin registrar"}</TableCell>
+                        <TableCell>{caseItem.rejectedCustomerPhone?.trim() || "Sin registrar"}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

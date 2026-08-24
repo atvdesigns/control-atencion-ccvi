@@ -990,6 +990,10 @@ export const finishDocumentValidation = (
   caseId: string,
   status: Exclude<DocumentStatus, "pending">,
   role: Role,
+  rejectedContact?: {
+    customerName?: string;
+    customerPhone?: string;
+  },
 ): AppData => {
   const base = ensureSession(data);
   const current = base.cases[caseId];
@@ -997,6 +1001,9 @@ export const finishDocumentValidation = (
   const now = Date.now();
 
   if (status === "incomplete" || status === "rejected") {
+    const rejectedCustomerName = rejectedContact?.customerName?.trim() || undefined;
+    const rejectedCustomerPhone = rejectedContact?.customerPhone?.trim() || undefined;
+
     return transitionCase(
       base,
       caseId,
@@ -1004,6 +1011,9 @@ export const finishDocumentValidation = (
         currentState: status === "incomplete" ? "documentation_incomplete" : "rejected",
         documentStatus: status,
         documentValidationCompletedAt: now,
+        ...(status === "rejected"
+          ? { rejectedCustomerName, rejectedCustomerPhone }
+          : {}),
       },
       status === "incomplete" ? "documentation_incomplete" : "case_rejected",
       role,

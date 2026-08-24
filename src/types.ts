@@ -153,6 +153,8 @@ export interface CaseRecord {
   documentValidationStartedAt: number | null;
   documentValidationCompletedAt: number | null;
   documentStatus: DocumentStatus;
+  rejectedCustomerName?: string;
+  rejectedCustomerPhone?: string;
   optionalInternalNote: string | null;
   folderCode: string | null;
   paymentQueueNumber: number | null;
