@@ -54,6 +54,25 @@
 - Rechazar no envía a caja.
 - Reasignar conserva código público y hora de llegada.
 
+## Atención preferencial
+
+- [ ] Solo Ventanilla 1 y Ventanilla 2 pueden crear, cambiar o quitar prioridad.
+- [ ] Tótem, caja, QR y display no ofrecen controles para modificar prioridad.
+- [ ] Un caso preferencial conserva `isPriority`, motivo, actor y fecha al ingresar a caja.
+- [ ] Crear, cambiar o quitar prioridad conserva `publicCode`, ventanilla y estado operacional.
+- [ ] Un turno regular se presenta como `V1-14`; uno preferencial como `V2-11 P`.
+- [ ] La `P` no forma parte del `publicCode` persistido ni se duplica como `P P`.
+- [ ] Quitar prioridad cambia `V2-11 P` a `V2-11` sin crear otro turno.
+- [ ] El motivo específico solo es visible en ventanilla y no aparece en tótem, QR, caja o display.
+- [ ] La etiqueta accesible anuncia “Turno V2-11, atención preferencial”.
+- [ ] FIFO se conserva dentro de los grupos preferencial y regular en ventanilla.
+- [ ] FIFO se conserva dentro de los grupos preferencial y regular en caja.
+- [ ] Con política 2P:1R, tres preferenciales y tres regulares producen `P1, P2, R1, P3, R2, R3`.
+- [ ] Con solo preferenciales o solo regulares, la cola continúa sin bloqueo.
+- [ ] Quitar prioridad antes del llamado vuelve el caso elegible como regular.
+- [ ] Un caso preferencial en estado no elegible no puede adelantarse.
+- [ ] `Vn-00` nunca aparece en ninguna representación pública o interna visible.
+
 ## Cajas
 
 - Caja llama siguiente desde cola única.

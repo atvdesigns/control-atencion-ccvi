@@ -99,6 +99,19 @@ Sistema web paperless-first, multirrol y multicientro para ordenar la llegada de
 - Display usa siempre el `publicCode`.
 - Eventos de trazabilidad registran actor, accion, estado anterior, estado nuevo y timestamp.
 
+## Atención preferencial end-to-end
+
+- Solo Ventanilla 1 y Ventanilla 2 pueden crear, actualizar o quitar prioridad.
+- Caja, tótem, QR y display público no pueden modificarla.
+- La condición preferencial se conserva al avanzar hacia caja; no existe un segundo indicador de prioridad.
+- `publicCode` no cambia. La `P` se agrega únicamente al representar el turno en interfaces autorizadas y no se persiste en el código.
+- El motivo específico permanece restringido a personal de ventanilla. Caja y display solo comunican que el turno es preferencial.
+- La etiqueta accesible equivalente es “Turno Vn-XX, atención preferencial”.
+- Las colas documental y de caja separan casos elegibles en preferenciales y regulares, manteniendo FIFO dentro de cada grupo.
+- La política inicial configurable usa `maxConsecutivePriorityCases = 2`: selecciona hasta dos preferenciales consecutivos y luego un regular si existe.
+- Si uno de los grupos está vacío, se continúa con el otro sin bloquear la operación.
+- Eliminar o cambiar la prioridad no crea otro turno, no cambia ventanilla ni altera el estado operacional.
+
 ## MVP incluido
 
 - Admin puede crear centros.

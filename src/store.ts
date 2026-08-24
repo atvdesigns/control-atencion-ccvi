@@ -139,11 +139,18 @@ export const getAccessiblePublicCode = (publicCode: string) => {
     .join(" ")}`;
 };
 
-export const formatPublicTicketLabel = (publicCode: string, isPriority: boolean) =>
-  `${publicCode}${isPriority ? " P" : ""}`;
+const normalizePublicTicketLabel = (publicCode: string) =>
+  publicCode.replace(/(?:\s+P)+$/u, "");
 
-export const getAccessiblePublicTicketLabel = (publicCode: string, isPriority: boolean) =>
-  `Turno ${publicCode}${isPriority ? ", atención preferencial" : ""}`;
+export const formatPublicTicketLabel = (publicCode: string, isPriority: boolean) => {
+  const normalizedPublicCode = normalizePublicTicketLabel(publicCode);
+  return `${normalizedPublicCode}${isPriority ? " P" : ""}`;
+};
+
+export const getAccessiblePublicTicketLabel = (publicCode: string, isPriority: boolean) => {
+  const normalizedPublicCode = normalizePublicTicketLabel(publicCode);
+  return `Turno ${normalizedPublicCode}${isPriority ? ", atención preferencial" : ""}`;
+};
 
 export const serviceLabels: Record<ServiceType, string> = {
   representation: "Representación, empresa o poder notarial",
@@ -780,7 +787,9 @@ export const markCaseAsPriority = (
     !["operator-window-1", "operator-window-2"].includes(role) ||
     current.centerId !== data.selectedCenterId ||
     current.isPriority ||
-    !["called_to_window", "in_document_validation"].includes(current.currentState)
+    !["waiting_document_validation", "called_to_window", "in_document_validation"].includes(
+      current.currentState,
+    )
   ) {
     return data;
   }
@@ -831,7 +840,9 @@ export const updateCasePriority = (
     current.centerId !== data.selectedCenterId ||
     !current.isPriority ||
     current.priorityType === priorityType ||
-    !["called_to_window", "in_document_validation"].includes(current.currentState)
+    !["waiting_document_validation", "called_to_window", "in_document_validation"].includes(
+      current.currentState,
+    )
   ) {
     return data;
   }
@@ -876,7 +887,9 @@ export const removeCasePriority = (
     !["operator-window-1", "operator-window-2"].includes(role) ||
     current.centerId !== data.selectedCenterId ||
     !current.isPriority ||
-    !["called_to_window", "in_document_validation"].includes(current.currentState)
+    !["waiting_document_validation", "called_to_window", "in_document_validation"].includes(
+      current.currentState,
+    )
   ) {
     return data;
   }

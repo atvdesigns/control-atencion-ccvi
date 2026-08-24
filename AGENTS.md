@@ -1229,6 +1229,22 @@ V2-01, V2-02...
 - Dos cajeros nunca pueden obtener el mismo caso.
 - La asignación debe ser atómica.
 
+## Atención preferencial
+
+- Solo Ventanilla 1 y Ventanilla 2 pueden crear, cambiar o quitar una atención preferencial.
+- Tótem, caja, display público y QR no pueden crear ni modificar prioridad.
+- La prioridad se conserva durante todo el ciclo, incluida la cola única de caja.
+- El `publicCode` permanece inmutable. La `P` es solo una representación visual y nunca forma parte del valor persistido.
+- Una interfaz nunca debe producir etiquetas duplicadas como `V2-11 P P`.
+- El motivo específico de prioridad es información interna y solo puede mostrarse al personal autorizado de ventanilla.
+- Caja y display pueden indicar `Vn-XX P`, sin exponer el motivo. Tótem y QR mantienen el código público limpio.
+- La alternativa accesible debe anunciar: “Turno V2-11, atención preferencial”. La prioridad no puede depender solo de la letra `P` o del color.
+- Las colas documental y de caja mantienen FIFO dentro de los grupos preferencial y regular.
+- La política inicial configurable es `maxConsecutivePriorityCases = 2`: hasta dos preferenciales y luego un regular si existe.
+- Si no hay regulares, continúan los preferenciales; si no hay preferenciales, continúa FIFO regular.
+- La política debe evitar que los casos regulares queden postergados indefinidamente.
+- Codex no puede cambiar estas reglas sin autorización explícita.
+
 ## Content Design
 
 - Todo texto visible debe estar en español claro.

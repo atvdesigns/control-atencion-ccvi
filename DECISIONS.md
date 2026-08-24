@@ -32,3 +32,14 @@
 - El administrador puede seleccionar centro y dia de atencion para revisar metricas.
 - En el MVP, la descarga para Excel se implementa como CSV compatible con Excel para evitar dependencias adicionales.
 - En el MVP, la salida PDF se prepara mediante una vista imprimible del navegador.
+
+## 2026-08-24 - Atención preferencial end-to-end
+
+- Solo Ventanilla 1 y Ventanilla 2 administran la condición preferencial.
+- La prioridad se conserva durante todo el journey, incluida la cola de caja.
+- `publicCode` es inmutable; la marca `P` es exclusivamente visual y no se persiste como parte del código.
+- El motivo de prioridad es información interna de ventanilla y no se expone públicamente.
+- Caja y display pueden mostrar `Vn-XX P`; el QR y el tótem mantienen el código limpio.
+- Las colas documental y de caja conservan FIFO dentro de los grupos preferencial y regular.
+- La política inicial configurable es 2P:1R cuando ambos grupos tienen casos elegibles.
+- Si solo existe un grupo, la operación continúa con sus casos en orden FIFO.

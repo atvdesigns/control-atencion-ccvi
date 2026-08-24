@@ -26,6 +26,15 @@ Aplicacion web paperless-first para gestionar la atencion del Centro de Custodia
 - El administrador puede descargar metricas como CSV compatible con Excel y preparar una vista imprimible/PDF.
 - No se implementa SMS ni WhatsApp en MVP ni roadmap definido.
 
+## Atención preferencial
+
+- Solo Ventanilla 1 y Ventanilla 2 pueden crear, cambiar o quitar la condición preferencial.
+- La prioridad acompaña al caso durante validación documental y caja sin modificar su `publicCode`.
+- La marca visible `P` es solo de presentación: `V2-11 P` conserva internamente `publicCode = "V2-11"`.
+- El motivo es información interna de ventanilla y no se expone en tótem, QR, caja ni display público.
+- Las colas documental y de caja respetan FIFO dentro de los grupos preferencial y regular.
+- La política demo permite hasta dos atenciones preferenciales consecutivas y luego una regular si existe.
+
 ## Flujo MVP
 
 1. El usuario selecciona su tipo de atencion en el totem.
