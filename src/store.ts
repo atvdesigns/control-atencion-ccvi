@@ -951,6 +951,114 @@ export const callNextForOperator = (data: AppData, windowId: string, role: Role)
   );
 };
 
+export const callNextForOperatorRealtime = async (
+  data: AppData,
+  windowId: string,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) return callNextForOperator(data, windowId, role);
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const now = Date.now();
+  const eventId = `${now}-${transactionNonce()}`;
+  const dayReference = ref(database, `days/${base.selectedCenterId}/${session.date}`);
+
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      if (!currentValue) return;
+
+      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
+      const remoteMetadata = currentValue.metadata ?? {};
+      const remoteSession = {
+        ...session,
+        ...remoteMetadata,
+      };
+      const transactionData: AppData = {
+        ...base,
+        cases: remoteCases,
+        sessions: {
+          ...base.sessions,
+          [session.sessionId]: remoteSession,
+        },
+      };
+      const hasActiveCase = Object.values(remoteCases).some(
+        (caseItem) =>
+          caseItem.centerId === base.selectedCenterId &&
+          caseItem.sessionId === session.sessionId &&
+          caseItem.assignedWindowId === windowId &&
+          ["called_to_window", "in_document_validation"].includes(caseItem.currentState),
+      );
+      if (hasActiveCase) return;
+
+      const next = nextOperatorCase(transactionData, windowId);
+      if (!next || next.currentState !== "waiting_document_validation") return;
+
+      const previousPriorityCount =
+        remoteSession.consecutivePriorityCasesByWindow?.[windowId] ?? 0;
+      const nextPriorityCount = next.isPriority ? previousPriorityCount + 1 : 0;
+      const nextCase: CaseRecord = {
+        ...next,
+        assignedOperatorId: role,
+        currentState: "called_to_window",
+        calledToWindowAt: now,
+        updatedAt: now,
+      };
+      const callEvent: TraceEvent = {
+        eventId,
+        centerId: next.centerId,
+        sessionId: next.sessionId,
+        caseId: next.caseId,
+        actorRole: role,
+        actorId: role,
+        action: "called_to_window",
+        fromState: next.currentState,
+        toState: nextCase.currentState,
+        timestamp: now,
+        optionalNote: null,
+      };
+
+      return {
+        ...currentValue,
+        metadata: {
+          ...remoteSession,
+          consecutivePriorityCasesByWindow: {
+            ...remoteSession.consecutivePriorityCasesByWindow,
+            [windowId]: nextPriorityCount,
+          },
+        },
+        cases: {
+          ...remoteCases,
+          [next.caseId]: nextCase,
+        },
+        events: {
+          ...collectionRecord<TraceEvent>(currentValue.events),
+          [eventId]: callEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedMetadata = committedDay?.metadata;
+  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
+  if (!committedDay?.cases || !committedMetadata || !committedEvent) return base;
+
+  return {
+    ...base,
+    sessions: {
+      ...base.sessions,
+      [session.sessionId]: { ...session, ...committedMetadata },
+    },
+    cases: { ...base.cases, ...committedDay.cases },
+    events: [committedEvent, ...base.events],
+  };
+};
+
 export const startValidation = (data: AppData, caseId: string, role: Role): AppData => {
   const current = data.cases[caseId];
   if (!current || current.currentState !== "called_to_window") return data;
@@ -962,6 +1070,88 @@ export const startValidation = (data: AppData, caseId: string, role: Role): AppD
     "validation_started",
     role,
   );
+};
+
+export const startValidationRealtime = async (
+  data: AppData,
+  caseId: string,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) return startValidation(data, caseId, role);
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const expectedCase = base.cases[caseId];
+  if (!expectedCase) return base;
+
+  const now = Date.now();
+  const eventId = `${now}-${transactionNonce()}`;
+  const dayReference = ref(database, `days/${base.selectedCenterId}/${session.date}`);
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      if (!currentValue) return;
+
+      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
+      const current = remoteCases[caseId];
+      if (
+        !current ||
+        current.centerId !== base.selectedCenterId ||
+        current.sessionId !== session.sessionId ||
+        current.assignedWindowId !== expectedCase.assignedWindowId ||
+        current.assignedOperatorId !== role ||
+        current.currentState !== "called_to_window"
+      ) {
+        return;
+      }
+
+      const nextCase: CaseRecord = {
+        ...current,
+        currentState: "in_document_validation",
+        documentValidationStartedAt: now,
+        updatedAt: now,
+      };
+      const validationEvent: TraceEvent = {
+        eventId,
+        centerId: current.centerId,
+        sessionId: current.sessionId,
+        caseId,
+        actorRole: role,
+        actorId: role,
+        action: "validation_started",
+        fromState: current.currentState,
+        toState: nextCase.currentState,
+        timestamp: now,
+        optionalNote: null,
+      };
+
+      return {
+        ...currentValue,
+        cases: {
+          ...remoteCases,
+          [caseId]: nextCase,
+        },
+        events: {
+          ...collectionRecord<TraceEvent>(currentValue.events),
+          [eventId]: validationEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedCase = committedDay?.cases?.[caseId];
+  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
+  if (!committedCase || !committedEvent) return base;
+
+  return {
+    ...base,
+    cases: { ...base.cases, [caseId]: committedCase },
+    events: [committedEvent, ...base.events],
+  };
 };
 
 export const markWindowNoShow = (data: AppData, caseId: string, role: Role): AppData => {
@@ -1254,6 +1444,221 @@ export const finishDocumentValidation = (
       event(nextData, caseId, role, "added_to_cashier_queue", "approved_for_cashier", "waiting_cashier"),
       ...nextData.events,
     ],
+  };
+};
+
+export const finishDocumentValidationRealtime = async (
+  data: AppData,
+  caseId: string,
+  status: Exclude<DocumentStatus, "pending">,
+  role: Role,
+  rejectedContact?: {
+    customerName?: string;
+    customerPhone?: string;
+  },
+): Promise<AppData> => {
+  if (!database) {
+    return finishDocumentValidation(data, caseId, status, role, rejectedContact);
+  }
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const center = getCurrentCenter(base);
+  const expectedCase = base.cases[caseId];
+  if (!expectedCase) return base;
+
+  const now = Date.now();
+  const eventIds =
+    status === "approved"
+      ? [`${now}-${transactionNonce()}`, `${now}-${transactionNonce()}`]
+      : [`${now}-${transactionNonce()}`];
+  const queueItemId = `${center.shortCode}-PAY-${transactionNonce()}`;
+  const rejectedCustomerName = rejectedContact?.customerName?.trim() || undefined;
+  const rejectedCustomerPhone = rejectedContact?.customerPhone?.trim() || undefined;
+  const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
+
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      if (!currentValue) return;
+
+      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
+      const current = remoteCases[caseId];
+      if (
+        !current ||
+        current.centerId !== center.centerId ||
+        current.sessionId !== session.sessionId ||
+        current.assignedWindowId !== expectedCase.assignedWindowId ||
+        current.assignedOperatorId !== role ||
+        current.currentState !== "in_document_validation"
+      ) {
+        return;
+      }
+
+      const remoteEvents = collectionRecord<TraceEvent>(currentValue.events);
+      if (status === "incomplete" || status === "rejected") {
+        const nextState =
+          status === "incomplete" ? "documentation_incomplete" : "rejected";
+        const nextCase: CaseRecord = {
+          ...current,
+          currentState: nextState,
+          documentStatus: status,
+          documentValidationCompletedAt: now,
+          ...(status === "rejected"
+            ? { rejectedCustomerName, rejectedCustomerPhone }
+            : {}),
+          updatedAt: now,
+        };
+        const completionEvent: TraceEvent = {
+          eventId: eventIds[0],
+          centerId: current.centerId,
+          sessionId: current.sessionId,
+          caseId,
+          actorRole: role,
+          actorId: role,
+          action: status === "incomplete" ? "documentation_incomplete" : "case_rejected",
+          fromState: current.currentState,
+          toState: nextState,
+          timestamp: now,
+          optionalNote: null,
+        };
+
+        return {
+          ...currentValue,
+          cases: { ...remoteCases, [caseId]: nextCase },
+          events: { ...remoteEvents, [eventIds[0]]: completionEvent },
+        } satisfies RealtimeOperationalDay;
+      }
+
+      const remoteMetadata = currentValue.metadata ?? {};
+      const storedFolderNumber = remoteMetadata.nextFolderNumber;
+      const folderNumber =
+        Number.isSafeInteger(storedFolderNumber) && Number(storedFolderNumber) >= 1
+          ? Number(storedFolderNumber)
+          : session.nextFolderNumber;
+      const storedQueueNumber = remoteMetadata.nextPaymentQueueNumber;
+      const queueNumber =
+        Number.isSafeInteger(storedQueueNumber) && Number(storedQueueNumber) >= 1
+          ? Number(storedQueueNumber)
+          : session.nextPaymentQueueNumber;
+      const folderCode = `${center.shortCode}-F${pad(folderNumber)}`;
+      const remotePaymentQueue = collectionRecord<PaymentQueueItem>(currentValue.paymentQueue);
+      const folderAlreadyExists =
+        Object.values(remoteCases).some(
+          (caseItem) => caseItem.caseId !== caseId && caseItem.folderCode === folderCode,
+        ) || Object.values(remotePaymentQueue).some((item) => item.folderCode === folderCode);
+      if (folderAlreadyExists || remotePaymentQueue[queueItemId]) return;
+
+      const paymentItem: PaymentQueueItem = {
+        queueItemId,
+        centerId: current.centerId,
+        sessionId: current.sessionId,
+        caseId,
+        publicCode: current.publicCode,
+        folderCode,
+        queueNumber,
+        approvedAt: now,
+        state: "waiting_cashier",
+        cashierId: null,
+        reservedAt: null,
+        calledAt: null,
+        startedAt: null,
+        completedAt: null,
+        updatedAt: now,
+      };
+      const nextCase: CaseRecord = {
+        ...current,
+        currentState: "waiting_cashier",
+        documentStatus: "approved",
+        documentValidationCompletedAt: now,
+        folderCode,
+        paymentQueueNumber: queueNumber,
+        paymentTicketId: queueItemId,
+        updatedAt: now,
+      };
+      const folderEvent: TraceEvent = {
+        eventId: eventIds[0],
+        centerId: current.centerId,
+        sessionId: current.sessionId,
+        caseId,
+        actorRole: role,
+        actorId: role,
+        action: "folder_code_generated",
+        fromState: "in_document_validation",
+        toState: "waiting_cashier",
+        timestamp: now,
+        optionalNote: null,
+      };
+      const queueEvent: TraceEvent = {
+        eventId: eventIds[1],
+        centerId: current.centerId,
+        sessionId: current.sessionId,
+        caseId,
+        actorRole: role,
+        actorId: role,
+        action: "added_to_cashier_queue",
+        fromState: "approved_for_cashier",
+        toState: "waiting_cashier",
+        timestamp: now,
+        optionalNote: null,
+      };
+
+      return {
+        ...currentValue,
+        metadata: {
+          ...session,
+          ...remoteMetadata,
+          nextFolderNumber: folderNumber + 1,
+          nextPaymentQueueNumber: queueNumber + 1,
+        },
+        cases: { ...remoteCases, [caseId]: nextCase },
+        paymentQueue: { ...remotePaymentQueue, [queueItemId]: paymentItem },
+        events: {
+          ...remoteEvents,
+          [eventIds[0]]: folderEvent,
+          [eventIds[1]]: queueEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedCase = committedDay?.cases?.[caseId];
+  if (!committedCase) return base;
+
+  const committedEvents = collectionRecord<TraceEvent>(committedDay?.events);
+  const nextEvents = eventIds
+    .map((eventId) => committedEvents[eventId])
+    .filter((eventItem): eventItem is TraceEvent => Boolean(eventItem));
+  if (nextEvents.length !== eventIds.length) return base;
+
+  const nextData: AppData = {
+    ...base,
+    cases: { ...base.cases, [caseId]: committedCase },
+    events: [...nextEvents, ...base.events],
+  };
+
+  if (status !== "approved") return nextData;
+
+  const committedMetadata = committedDay?.metadata;
+  const committedPaymentItem = committedCase.paymentTicketId
+    ? committedDay?.paymentQueue?.[committedCase.paymentTicketId]
+    : undefined;
+  if (!committedMetadata || !committedPaymentItem) return base;
+
+  return {
+    ...nextData,
+    sessions: {
+      ...base.sessions,
+      [session.sessionId]: { ...session, ...committedMetadata },
+    },
+    paymentQueue: {
+      ...base.paymentQueue,
+      [committedPaymentItem.queueItemId]: committedPaymentItem,
+    },
   };
 };
 
