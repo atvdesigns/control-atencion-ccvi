@@ -83,6 +83,16 @@ const normalizeCenter = (center: CenterConfig): CenterConfig => ({
   ...center,
   serviceStartTime: normalizeServiceTime(center.serviceStartTime, DEFAULT_SERVICE_START_TIME),
   serviceEndTime: normalizeServiceTime(center.serviceEndTime, DEFAULT_SERVICE_END_TIME),
+  cashierCommissionRate:
+    center.cashierCommissionRate !== undefined &&
+    Number.isFinite(center.cashierCommissionRate) &&
+    center.cashierCommissionRate >= 0
+      ? center.cashierCommissionRate
+      : undefined,
+  cashiers: (center.cashiers ?? []).map((cashier) => ({
+    ...cashier,
+    cashierName: cashier.cashierName?.trim() || undefined,
+  })),
   documentaryRequirements: normalizeDocumentaryRequirements(center.documentaryRequirements),
   paymentMethods: normalizePaymentMethods(center.paymentMethods),
 });
@@ -516,6 +526,7 @@ export const createCenter = (
   cashiers: number,
   serviceStartTime = DEFAULT_SERVICE_START_TIME,
   serviceEndTime = DEFAULT_SERVICE_END_TIME,
+  cashierCommissionRate?: number,
 ): AppData => {
   const now = Date.now();
   const safeRepresentationWindows = clampInteger(representationWindows, 1, 20, 1);
@@ -546,6 +557,12 @@ export const createCenter = (
     paperlessMode: true,
     documentaryRequirements: createDefaultDocumentaryRequirements(),
     paymentMethods: createDefaultPaymentMethods(),
+    cashierCommissionRate:
+      cashierCommissionRate !== undefined &&
+      Number.isFinite(cashierCommissionRate) &&
+      cashierCommissionRate >= 0
+        ? cashierCommissionRate
+        : undefined,
     windows,
     cashiers: Array.from({ length: safeCashiers }, (_, index) => ({
       cashierId: `${centerId}-cashier-${index + 1}`,
@@ -582,6 +599,8 @@ export const updateCenter = (
     | "qrEnabled"
     | "documentaryRequirements"
     | "paymentMethods"
+    | "cashiers"
+    | "cashierCommissionRate"
   >,
 ): AppData => {
   const center = data.centers[centerId];
@@ -596,6 +615,16 @@ export const updateCenter = (
     serviceEndTime: normalizeServiceTime(patch.serviceEndTime, getCenterServiceHours(center).end),
     kioskTimeoutSeconds: clampInteger(patch.kioskTimeoutSeconds, 8, 30, center.kioskTimeoutSeconds),
     qrEnabled: patch.qrEnabled,
+    cashierCommissionRate:
+      patch.cashierCommissionRate !== undefined &&
+      Number.isFinite(patch.cashierCommissionRate) &&
+      patch.cashierCommissionRate >= 0
+        ? patch.cashierCommissionRate
+        : undefined,
+    cashiers: patch.cashiers.map((cashier) => ({
+      ...cashier,
+      cashierName: cashier.cashierName?.trim() || undefined,
+    })),
     documentaryRequirements: normalizeDocumentaryRequirements(patch.documentaryRequirements),
     paymentMethods: normalizePaymentMethods(patch.paymentMethods),
     updatedAt: Date.now(),
@@ -1184,6 +1213,15 @@ export const completePayment = (data: AppData, queueItemId: string): AppData => 
   if (!item || item.state !== "in_cashier_attention") return data;
   const now = Date.now();
   const relatedCase = data.cases[item.caseId];
+  const center = data.centers[relatedCase.centerId];
+  const cashier = center?.cashiers.find(
+    (candidate) => candidate.cashierId === (item.cashierId ?? relatedCase.cashierId),
+  );
+  const cashierNameAtCompletion = cashier?.cashierName?.trim() || undefined;
+  const commissionRateApplied = center?.cashierCommissionRate;
+  const cashierDurationMs = relatedCase.cashierStartedAt === null
+    ? undefined
+    : Math.max(0, now - relatedCase.cashierStartedAt);
   const nextData: AppData = {
     ...data,
     cases: {
@@ -1192,6 +1230,10 @@ export const completePayment = (data: AppData, queueItemId: string): AppData => 
         ...relatedCase,
         currentState: "completed",
         paymentCompletedAt: now,
+        cashierNameAtCompletion,
+        cashierDurationMs,
+        commissionRateApplied,
+        commissionAmount: commissionRateApplied,
         completedAt: now,
         updatedAt: now,
       },

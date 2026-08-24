@@ -2351,9 +2351,19 @@ const AdminView = ({
       <CreateCenterDialog
         open={open}
         onClose={() => setOpen(false)}
-        onCreate={(name, code, representationWindows, ownerWindows, cashiers, serviceStartTime, serviceEndTime) => {
+        onCreate={(name, code, representationWindows, ownerWindows, cashiers, serviceStartTime, serviceEndTime, cashierCommissionRate) => {
           setData((current) =>
-            createCenter(current, name, code, representationWindows, ownerWindows, cashiers, serviceStartTime, serviceEndTime),
+            createCenter(
+              current,
+              name,
+              code,
+              representationWindows,
+              ownerWindows,
+              cashiers,
+              serviceStartTime,
+              serviceEndTime,
+              cashierCommissionRate,
+            ),
           );
           setOpen(false);
         }}
@@ -2408,6 +2418,7 @@ const CreateCenterDialog = ({
     cashiers: number,
     serviceStartTime: string,
     serviceEndTime: string,
+    cashierCommissionRate?: number,
   ) => void;
 }) => {
   const [name, setName] = useState("Nuevo Centro CCVI");
@@ -2417,6 +2428,7 @@ const CreateCenterDialog = ({
   const [cashiers, setCashiers] = useState(3);
   const [serviceStartTime, setServiceStartTime] = useState("08:00");
   const [serviceEndTime, setServiceEndTime] = useState("17:00");
+  const [cashierCommissionRate, setCashierCommissionRate] = useState("");
   const cleanName = name.trim();
   const cleanShortCode = shortCode.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
   const timeIsValid = serviceStartTime !== serviceEndTime;
@@ -2424,12 +2436,18 @@ const CreateCenterDialog = ({
     Number.isInteger(representationWindows) && representationWindows >= 1 && representationWindows <= 20;
   const ownerCountIsValid = Number.isInteger(ownerWindows) && ownerWindows >= 1 && ownerWindows <= 20;
   const cashierCountIsValid = Number.isInteger(cashiers) && cashiers >= 1 && cashiers <= 20;
+  const parsedCashierCommissionRate =
+    cashierCommissionRate.trim() === "" ? undefined : Number(cashierCommissionRate);
+  const cashierCommissionRateIsValid =
+    parsedCashierCommissionRate === undefined ||
+    (Number.isFinite(parsedCashierCommissionRate) && parsedCashierCommissionRate >= 0);
   const canCreateCenter =
     cleanName.length > 0 &&
     cleanShortCode.length >= 2 &&
     representationCountIsValid &&
     ownerCountIsValid &&
     cashierCountIsValid &&
+    cashierCommissionRateIsValid &&
     timeIsValid;
 
   return (
@@ -2484,6 +2502,20 @@ const CreateCenterDialog = ({
             inputProps={{ min: 1, max: 20 }}
             InputLabelProps={{ shrink: true }}
           />
+          <TextField
+            label="Bono por atención de cliente"
+            type="number"
+            value={cashierCommissionRate}
+            onChange={(event) => setCashierCommissionRate(event.target.value)}
+            error={!cashierCommissionRateIsValid}
+            helperText={
+              cashierCommissionRateIsValid
+                ? "Valor que recibe el personal de caja por cada atención completada en este centro."
+                : "Ingrese un valor igual o mayor que 0."
+            }
+            inputProps={{ min: 0, step: 1 }}
+            InputLabelProps={{ shrink: true }}
+          />
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
             <TextField
               fullWidth
@@ -2529,6 +2561,7 @@ const CreateCenterDialog = ({
               cashiers,
               serviceStartTime,
               serviceEndTime,
+              parsedCashierCommissionRate,
             )
           }
         >
@@ -2553,7 +2586,15 @@ const EditCenterDialog = ({
   onSave: (
     patch: Pick<
       CenterConfig,
-      "name" | "shortCode" | "timezone" | "serviceStartTime" | "serviceEndTime" | "kioskTimeoutSeconds" | "qrEnabled"
+      | "name"
+      | "shortCode"
+      | "timezone"
+      | "serviceStartTime"
+      | "serviceEndTime"
+      | "kioskTimeoutSeconds"
+      | "qrEnabled"
+      | "cashiers"
+      | "cashierCommissionRate"
     >,
   ) => void;
   canDelete: boolean;
@@ -2566,14 +2607,30 @@ const EditCenterDialog = ({
   const [serviceEndTime, setServiceEndTime] = useState(center.serviceEndTime);
   const [kioskTimeoutSeconds, setKioskTimeoutSeconds] = useState(center.kioskTimeoutSeconds);
   const [qrEnabled, setQrEnabled] = useState(center.qrEnabled);
+  const [cashierCommissionRate, setCashierCommissionRate] = useState(
+    center.cashierCommissionRate === undefined ? "" : String(center.cashierCommissionRate),
+  );
+  const [cashierNames, setCashierNames] = useState<Record<string, string>>(
+    Object.fromEntries(center.cashiers.map((cashier) => [cashier.cashierId, cashier.cashierName ?? ""])),
+  );
   const cleanName = name.trim();
   const cleanShortCode = shortCode.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
   const cleanTimezone = timezone.trim();
   const timeIsValid = serviceStartTime !== serviceEndTime;
   const timeoutIsValid =
     Number.isInteger(kioskTimeoutSeconds) && kioskTimeoutSeconds >= 8 && kioskTimeoutSeconds <= 30;
+  const parsedCashierCommissionRate =
+    cashierCommissionRate.trim() === "" ? undefined : Number(cashierCommissionRate);
+  const cashierCommissionRateIsValid =
+    parsedCashierCommissionRate === undefined ||
+    (Number.isFinite(parsedCashierCommissionRate) && parsedCashierCommissionRate >= 0);
   const canSaveCenter =
-    cleanName.length > 0 && cleanShortCode.length >= 2 && cleanTimezone.length > 0 && timeIsValid && timeoutIsValid;
+    cleanName.length > 0 &&
+    cleanShortCode.length >= 2 &&
+    cleanTimezone.length > 0 &&
+    timeIsValid &&
+    timeoutIsValid &&
+    cashierCommissionRateIsValid;
 
   useEffect(() => {
     setName(center.name);
@@ -2583,6 +2640,12 @@ const EditCenterDialog = ({
     setServiceEndTime(center.serviceEndTime);
     setKioskTimeoutSeconds(center.kioskTimeoutSeconds);
     setQrEnabled(center.qrEnabled);
+    setCashierCommissionRate(
+      center.cashierCommissionRate === undefined ? "" : String(center.cashierCommissionRate),
+    );
+    setCashierNames(
+      Object.fromEntries(center.cashiers.map((cashier) => [cashier.cashierId, cashier.cashierName ?? ""])),
+    );
   }, [center]);
 
   return (
@@ -2656,6 +2719,50 @@ const EditCenterDialog = ({
             control={<Switch checked={qrEnabled} onChange={(event) => setQrEnabled(event.target.checked)} />}
             label="QR habilitado en tótem"
           />
+          <TextField
+            label="Bono por atención de cliente"
+            type="number"
+            value={cashierCommissionRate}
+            onChange={(event) => setCashierCommissionRate(event.target.value)}
+            error={!cashierCommissionRateIsValid}
+            helperText={
+              cashierCommissionRateIsValid
+                ? "Valor que recibe el personal de caja por cada atención completada en este centro."
+                : "Ingrese un valor igual o mayor que 0."
+            }
+            inputProps={{ min: 0, step: 1 }}
+            InputLabelProps={{ shrink: true }}
+          />
+          <Box>
+            <Typography fontWeight={900} sx={{ mb: 0.5 }}>
+              Personal de caja
+            </Typography>
+            <Typography color="text.secondary" sx={{ mb: 2 }}>
+              Puede asociar una persona a cada caja sin cambiar el nombre visible de la estación.
+            </Typography>
+            <Stack spacing={2}>
+              {center.cashiers.map((cashier) => (
+                <Box key={cashier.cashierId}>
+                  <Typography variant="body2" fontWeight={800} sx={{ mb: 1 }}>
+                    {cashier.name}
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    label="Nombre y apellido de cajera/o"
+                    value={cashierNames[cashier.cashierId] ?? ""}
+                    onChange={(event) =>
+                      setCashierNames((current) => ({
+                        ...current,
+                        [cashier.cashierId]: event.target.value,
+                      }))
+                    }
+                    helperText="Opcional. Puede agregarlo o modificarlo posteriormente."
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Box>
+              ))}
+            </Stack>
+          </Box>
           <Alert severity="info">
             Las ventanillas y cajas creadas se conservan. La edición de cantidades se abordará en una configuración avanzada para evitar cambios accidentales durante una jornada.
           </Alert>
@@ -2739,6 +2846,11 @@ const EditCenterDialog = ({
               serviceEndTime,
               kioskTimeoutSeconds,
               qrEnabled,
+              cashierCommissionRate: parsedCashierCommissionRate,
+              cashiers: center.cashiers.map((cashier) => ({
+                ...cashier,
+                cashierName: cashierNames[cashier.cashierId]?.trim() || undefined,
+              })),
             })
           }
         >

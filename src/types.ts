@@ -70,6 +70,7 @@ export interface CashierConfig {
   cashierId: string;
   centerId: string;
   name: string;
+  cashierName?: string;
   enabled: boolean;
   displayOrder: number;
 }
@@ -105,6 +106,7 @@ export interface CenterConfig {
   paperlessMode: true;
   windows: WindowConfig[];
   cashiers: CashierConfig[];
+  cashierCommissionRate?: number;
   documentaryRequirements: DocumentaryRequirementsByService;
   paymentMethods: PaymentMethodConfig[];
   createdAt: number;
@@ -159,6 +161,10 @@ export interface CaseRecord {
   calledToCashierAt: number | null;
   cashierStartedAt: number | null;
   paymentCompletedAt: number | null;
+  cashierNameAtCompletion?: string;
+  cashierDurationMs?: number;
+  commissionRateApplied?: number;
+  commissionAmount?: number;
   completedAt: number | null;
   updatedAt: number;
 }
