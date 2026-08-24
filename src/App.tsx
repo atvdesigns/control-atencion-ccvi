@@ -63,6 +63,8 @@ import {
   TableRow,
   TextField,
   Toolbar,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import { QRCodeSVG } from "qrcode.react";
@@ -2155,9 +2157,24 @@ const AdminView = ({
     .filter((sessionItem) => sessionItem.centerId === center.centerId)
     .sort((a, b) => b.date.localeCompare(a.date));
   const [selectedMetricsSessionId, setSelectedMetricsSessionId] = useState(session.sessionId);
+  const [cashierPerformancePeriod, setCashierPerformancePeriod] = useState<"today" | "week" | "month">("today");
   const selectedMetricsSession = data.sessions[selectedMetricsSessionId] ?? session;
   const metrics = calculateMetrics(data, selectedMetricsSession.sessionId);
   const cashierPerformance = useMemo(() => {
+    const now = new Date();
+    const periodStart = new Date(now);
+    if (cashierPerformancePeriod === "today") {
+      periodStart.setHours(0, 0, 0, 0);
+    } else if (cashierPerformancePeriod === "week") {
+      const daysSinceMonday = (periodStart.getDay() + 6) % 7;
+      periodStart.setDate(periodStart.getDate() - daysSinceMonday);
+      periodStart.setHours(0, 0, 0, 0);
+    } else {
+      periodStart.setDate(1);
+      periodStart.setHours(0, 0, 0, 0);
+    }
+    const periodStartTimestamp = periodStart.getTime();
+    const nowTimestamp = now.getTime();
     const groups = new Map<
       string,
       {
@@ -2171,13 +2188,17 @@ const AdminView = ({
     >();
 
     Object.values(data.cases)
-      .filter(
-        (caseItem) =>
+      .filter((caseItem) => {
+        const completedAt = caseItem.paymentCompletedAt ?? caseItem.completedAt;
+        return (
           caseItem.centerId === center.centerId &&
-          caseItem.sessionId === selectedMetricsSession.sessionId &&
           caseItem.currentState === "completed" &&
-          caseItem.cashierId,
-      )
+          caseItem.cashierId &&
+          typeof completedAt === "number" &&
+          completedAt >= periodStartTimestamp &&
+          completedAt <= nowTimestamp
+        );
+      })
       .forEach((caseItem) => {
         const cashierId = caseItem.cashierId as string;
         const cashierName = caseItem.cashierNameAtCompletion?.trim() || "Sin cajera/o asignado";
@@ -2222,7 +2243,7 @@ const AdminView = ({
           b.completedCount - a.completedCount ||
           a.cashierName.localeCompare(b.cashierName, "es"),
       );
-  }, [center.centerId, data.cases, selectedMetricsSession.sessionId]);
+  }, [cashierPerformancePeriod, center.centerId, data.cases]);
   const clpFormatter = useMemo(
     () => new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }),
     [],
@@ -2354,6 +2375,19 @@ const AdminView = ({
         <Card>
           <CardContent>
             <SectionTitle icon={<Payments />} title="Rendimiento de cajas" />
+            <ToggleButtonGroup
+              value={cashierPerformancePeriod}
+              exclusive
+              onChange={(_event, period: "today" | "week" | "month" | null) => {
+                if (period) setCashierPerformancePeriod(period);
+              }}
+              aria-label="Período de rendimiento de cajas"
+              sx={{ mt: 2 }}
+            >
+              <ToggleButton value="today">Hoy</ToggleButton>
+              <ToggleButton value="week">Semana</ToggleButton>
+              <ToggleButton value="month">Mes</ToggleButton>
+            </ToggleButtonGroup>
             {cashierPerformance.length === 0 ? (
               <Typography color="text.secondary" sx={{ mt: 2 }}>
                 No hay atenciones completadas para mostrar.
