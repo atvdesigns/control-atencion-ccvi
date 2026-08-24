@@ -115,7 +115,11 @@ import {
   updateCenter,
   windowForRole,
 } from "./store";
-import { hasFirebaseConfig } from "./services/firebase";
+import {
+  hasFirebaseConfig,
+  subscribeToOperationalDay,
+  type OperationalDaySnapshot,
+} from "./services/firebase";
 
 const roleOptions: Role[] = [
   "kiosk",
@@ -3439,6 +3443,8 @@ const Page = ({
 
 const App = () => {
   const [data, setDataState] = useState<AppData>(() => loadData());
+  const [, setRemoteOperationalDay] =
+    useState<OperationalDaySnapshot | null>(null);
   const [role, setRoleState] = useState<Role>(() => getRoleFromUrl());
   const [snackbar, setSnackbar] = useState<string | null>(null);
 
@@ -3474,6 +3480,20 @@ const App = () => {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
+
+  const selectedCenterId = data.selectedCenterId;
+  const selectedDayId = getCurrentSession(data)?.date;
+
+  useEffect(() => {
+    setRemoteOperationalDay(null);
+    if (!selectedDayId) return;
+
+    return subscribeToOperationalDay(
+      selectedCenterId,
+      selectedDayId,
+      setRemoteOperationalDay,
+    );
+  }, [selectedCenterId, selectedDayId]);
 
   if (publicToken) {
     return <PublicStatusView data={data} token={publicToken} />;

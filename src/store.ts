@@ -17,6 +17,7 @@ import {
   normalizeDocumentaryRequirements,
   normalizePaymentMethods,
 } from "./centerJourneyConfig";
+import { database, ref, runTransaction } from "./services/firebase";
 
 const STORAGE_KEY = "ccvi-control-atencion-demo-v2-3";
 
@@ -514,6 +515,178 @@ export const createArrival = (data: AppData, serviceType: ServiceType): AppData 
       event(updated, caseId, "kiosk", "arrival_created", null, "waiting_document_validation"),
       ...updated.events,
     ],
+  };
+};
+
+type RealtimeOperationalDay = {
+  metadata?: Partial<ReturnType<typeof getCurrentSession>>;
+  cases?: Record<string, CaseRecord>;
+  paymentQueue?: Record<string, PaymentQueueItem>;
+  events?: Record<string, TraceEvent> | TraceEvent[];
+};
+
+const collectionRecord = <T>(value: unknown): Record<string, T> => {
+  if (!value || typeof value !== "object") return {};
+  return { ...(value as Record<string, T>) };
+};
+
+const transactionNonce = () => {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi) throw new Error("SECURE_RANDOM_UNAVAILABLE");
+
+  if (typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+
+  const values = new Uint32Array(4);
+  cryptoApi.getRandomValues(values);
+  return Array.from(values, (value) => value.toString(36)).join("-");
+};
+
+export const createArrivalRealtime = async (
+  data: AppData,
+  serviceType: ServiceType,
+): Promise<AppData> => {
+  if (!database) return createArrival(data, serviceType);
+
+  const base = ensureSession(data);
+  const center = getCurrentCenter(base);
+  const session = getCurrentSession(base);
+  const assignedWindow = firstEnabledWindowFor(center, serviceType);
+
+  if (!assignedWindow || session.status !== "open" || !isCenterOpenForTickets(center)) {
+    return base;
+  }
+
+  const now = Date.now();
+  const nonce = transactionNonce();
+  const caseId = `${center.shortCode}-${session.date}-${nonce}`;
+  const publicToken = transactionNonce();
+  const eventId = `${now}-${transactionNonce()}`;
+  const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
+
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      const currentDay = currentValue ?? {};
+      const currentMetadata = currentDay.metadata ?? {};
+      if (currentMetadata.status === "closed") return;
+
+      const windowSequences = collectionRecord<number>(currentMetadata.windowSequences);
+      const storedSequence = windowSequences[assignedWindow.windowId];
+      const currentSequence =
+        Number.isSafeInteger(storedSequence) && storedSequence >= 0 ? storedSequence : 0;
+      const publicSequence = currentSequence + 1;
+      const publicCode = formatPublicCode(assignedWindow.windowNumber, publicSequence);
+      const storedGlobalSequence = currentMetadata.nextGlobalArrivalSequence;
+      const globalArrivalSequence =
+        typeof storedGlobalSequence === "number" &&
+        Number.isSafeInteger(storedGlobalSequence) &&
+        storedGlobalSequence >= 1
+          ? storedGlobalSequence
+          : 1;
+
+      const caseRecord: CaseRecord = {
+        caseId,
+        publicToken,
+        centerId: center.centerId,
+        sessionId: session.sessionId,
+        publicCode,
+        globalArrivalSequence,
+        publicSequence,
+        serviceType,
+        serviceLabel: assignedWindow.serviceLabel,
+        validationLevel: assignedWindow.validationLevel,
+        personKind: "not_specified",
+        assignedWindowId: assignedWindow.windowId,
+        assignedWindowNumber: assignedWindow.windowNumber,
+        assignedOperatorId: null,
+        isPriority: false,
+        priorityType: null,
+        priorityCreatedBy: null,
+        priorityCreatedAt: null,
+        currentState: "waiting_document_validation",
+        arrivalAt: now,
+        calledToWindowAt: null,
+        documentValidationStartedAt: null,
+        documentValidationCompletedAt: null,
+        documentStatus: "pending",
+        optionalInternalNote: null,
+        folderCode: null,
+        paymentQueueNumber: null,
+        paymentTicketId: null,
+        cashierId: null,
+        calledToCashierAt: null,
+        cashierStartedAt: null,
+        paymentCompletedAt: null,
+        completedAt: null,
+        updatedAt: now,
+      };
+      const arrivalEvent: TraceEvent = {
+        eventId,
+        centerId: center.centerId,
+        sessionId: session.sessionId,
+        caseId,
+        actorRole: "kiosk",
+        actorId: "kiosk",
+        action: "arrival_created",
+        fromState: null,
+        toState: "waiting_document_validation",
+        timestamp: now,
+        optionalNote: null,
+      };
+
+      return {
+        ...currentDay,
+        metadata: {
+          ...session,
+          ...currentMetadata,
+          sessionId: session.sessionId,
+          centerId: center.centerId,
+          date: session.date,
+          status: "open",
+          nextGlobalArrivalSequence: globalArrivalSequence + 1,
+          windowSequences: {
+            ...windowSequences,
+            [assignedWindow.windowId]: publicSequence,
+          },
+        },
+        cases: {
+          ...collectionRecord<CaseRecord>(currentDay.cases),
+          [caseId]: caseRecord,
+        },
+        events: {
+          ...collectionRecord<TraceEvent>(currentDay.events),
+          [eventId]: arrivalEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedCase = committedDay?.cases?.[caseId];
+  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
+  const committedMetadata = committedDay?.metadata;
+
+  if (!committedCase || !committedEvent || !committedMetadata) return base;
+
+  return {
+    ...base,
+    sessions: {
+      ...base.sessions,
+      [session.sessionId]: {
+        ...session,
+        ...committedMetadata,
+      },
+    },
+    cases: {
+      ...base.cases,
+      [caseId]: committedCase,
+    },
+    events: [committedEvent, ...base.events],
   };
 };
 
