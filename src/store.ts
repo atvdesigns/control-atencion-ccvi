@@ -1219,6 +1219,24 @@ export const markCaseAsPriority = (
   };
 };
 
+export const createPriorityArrival = (
+  data: AppData,
+  serviceType: ServiceType,
+  priorityType: PriorityType,
+  role: Role,
+): AppData => {
+  const withArrival = createArrival(data, serviceType);
+  const createdCase = Object.values(withArrival.cases).find(
+    (candidate) => !data.cases[candidate.caseId],
+  );
+
+  if (!createdCase || createdCase.currentState !== "waiting_document_validation") {
+    return withArrival;
+  }
+
+  return markCaseAsPriority(withArrival, createdCase.caseId, priorityType, role);
+};
+
 export const updateCasePriority = (
   data: AppData,
   caseId: string,

@@ -98,6 +98,7 @@ import {
   loadData,
   markWindowNoShow,
   markCaseAsPriority,
+  createPriorityArrival,
   removeCasePriority,
   markNoShow,
   pausePayment,
@@ -1277,6 +1278,7 @@ const OperatorView = ({
   setData: (updater: (data: AppData) => AppData) => void;
 }) => {
   const [priorityDialogCase, setPriorityDialogCase] = useState<CaseRecord | null>(null);
+  const [priorityCreationOpen, setPriorityCreationOpen] = useState(false);
   const [priorityRemovalCase, setPriorityRemovalCase] = useState<CaseRecord | null>(null);
   const [selectedPriorityType, setSelectedPriorityType] = useState<PriorityType | "">("");
   const [rejectionDialogCase, setRejectionDialogCase] = useState<CaseRecord | null>(null);
@@ -1284,6 +1286,7 @@ const OperatorView = ({
   const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
   const closePriorityDialog = () => {
     setPriorityDialogCase(null);
+    setPriorityCreationOpen(false);
     setSelectedPriorityType("");
   };
   const closeRejectionDialog = () => {
@@ -1325,24 +1328,65 @@ const OperatorView = ({
       description="Recuerda que debes esperar a que el usuario se presente, validar la documentación presentada, asignar una carpeta física, escribir el número de atención en la carpeta e informar al usuario que será derivado a caja."
     >
       <Stack spacing={{ xs: 3, md: 4 }} useFlexGap>
-        <Card sx={{ bgcolor: ccviPalette.navy, color: "white", borderRadius: surfaceRadius }}>
-          <CardContent>
-            <Stack spacing={2}>
-              <Typography variant="h5">Próxima atención documental</Typography>
-              <Button
-                variant="contained"
-                color="secondary"
-                startIcon={<PlayArrow />}
-                onClick={() =>
-                  setData((currentData) =>
-                    callNextForOperator(currentData, operatorWindow.windowId, role),
-                  )
-                }
-                disabled={Boolean(activeCase) || waitingCases.length === 0}
-                sx={{ width: "100%" }}
+        <Grid2 container spacing={3} alignItems="stretch">
+          <Grid2 size={{ xs: 12, md: 6 }}>
+              <Card
+                sx={{
+                  bgcolor: ccviPalette.navy,
+                  color: "white",
+                  borderRadius: surfaceRadius,
+                  overflow: "hidden",
+                }}
               >
-                Llamar siguiente turno
-              </Button>
+                <Box
+                  sx={{
+                    px: { xs: 2, sm: 3 },
+                    py: 2,
+                    borderBottom: "1px solid rgba(255, 255, 255, 0.16)",
+                  }}
+                >
+                  <Typography variant="h5">Próxima atención documental</Typography>
+                </Box>
+                <CardContent
+                  sx={{
+                    p: { xs: 2, sm: 3 },
+                    "&:last-child": { pb: { xs: 2, sm: 3 } },
+                  }}
+                >
+                  <Stack spacing={2}>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                      <Button
+                  variant="contained"
+                  color="secondary"
+                  startIcon={<PlayArrow />}
+                  onClick={() =>
+                    setData((currentData) =>
+                      callNextForOperator(currentData, operatorWindow.windowId, role),
+                    )
+                  }
+                  disabled={Boolean(activeCase) || waitingCases.length === 0}
+                        sx={{ width: "100%", flex: 1, minHeight: 48 }}
+                      >
+                        Siguiente turno
+                      </Button>
+            <Button
+              variant="contained"
+              onClick={() => {
+                setPriorityDialogCase(null);
+                setSelectedPriorityType("");
+                setPriorityCreationOpen(true);
+              }}
+              sx={{
+                          width: "100%",
+                          flex: 1,
+                          minHeight: 48,
+                          bgcolor: "info.main",
+                          "&:hover": { bgcolor: "info.dark" },
+                        }}
+                      >
+                  Turno Preferencial
+                </Button>
+              </Stack>
               {activeCase && (
                 <Alert severity="warning">
                   Debe finalizar {activeCase.publicCode} antes de llamar otro cliente.
@@ -1357,6 +1401,9 @@ const OperatorView = ({
           </CardContent>
         </Card>
 
+          </Grid2>
+
+          <Grid2 size={{ xs: 12, md: 6 }}>
         <Paper variant="outlined" sx={{ ...sectionContainerSx, p: 0 }}>
           <Box sx={sectionHeaderSx}>
             <Stack direction="row" alignItems="center" spacing={1.25}>
@@ -1385,58 +1432,52 @@ const OperatorView = ({
             )}
             {activeCase && (
               <CaseCard caseItem={activeCase} center={center} prominent showPriorityLabel>
-                {activeCase.isPriority && activeCase.priorityType ? (
-                  <Stack spacing={1} alignItems="flex-start">
-                    <Alert severity="info" sx={{ width: "100%" }}>
-                      <strong>Atención preferencial:</strong>{" "}
-                      {priorityTypeLabels[activeCase.priorityType]}
+            {activeCase.currentState === "called_to_window" && (
+                  <Stack spacing={1.5}>
+                    <Alert severity="info">
+                      Este turno ya fue llamado. Espere a que la persona se presente para iniciar la revisión.
                     </Alert>
+                <Stack
+                  direction={{ xs: "column", sm: "row" }}
+                  spacing={1}
+                  alignItems={{ xs: "stretch", sm: "center" }}
+                >
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                    <Button
+                      variant="contained"
+                      onClick={() =>
+                        setData((currentData) =>
+                          startValidation(currentData, activeCase.caseId, role),
+                        )
+                      }
+                    >
+                      Iniciar validación
+                    </Button>
                     <Button
                       variant="outlined"
+                      color="warning"
+                      onClick={() =>
+                        setData((currentData) =>
+                          markWindowNoShow(currentData, activeCase.caseId, role),
+                        )
+                      }
+                    >
+                      No se presentó
+                    </Button>
+                  </Stack>
+                  {activeCase.isPriority && activeCase.priorityType ? (
+                    <Button
+                      variant="text"
+                      sx={{ minHeight: 44, ml: { sm: "auto" } }}
                       onClick={() => {
                         setPriorityDialogCase(activeCase);
                         setSelectedPriorityType(activeCase.priorityType ?? "");
                       }}
                     >
-                      Gestionar atención preferencial
+                      Gestionar preferencial
                     </Button>
-                  </Stack>
-                ) : (
-                  <Button
-                    variant="outlined"
-                    onClick={() => {
-                      setPriorityDialogCase(activeCase);
-                      setSelectedPriorityType("");
-                    }}
-                    sx={{ alignSelf: "flex-start" }}
-                  >
-                    Crear atención preferencial
-                  </Button>
-                )}
-                {activeCase.currentState === "called_to_window" && (
-                  <Stack spacing={1.5}>
-                    <Alert severity="info">
-                      Este turno ya fue llamado. Espere a que la persona se presente para iniciar la revisión.
-                    </Alert>
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                      <Button
-                        variant="contained"
-                        onClick={() =>
-                          setData((currentData) => startValidation(currentData, activeCase.caseId, role))
-                        }
-                      >
-                        Iniciar validación
-                      </Button>
-                      <Button
-                        variant="outlined"
-                        color="warning"
-                        onClick={() =>
-                          setData((currentData) => markWindowNoShow(currentData, activeCase.caseId, role))
-                        }
-                      >
-                        No se presentó
-                      </Button>
-                    </Stack>
+                  ) : null}
+                </Stack>
                   </Stack>
                 )}
                 {activeCase.currentState === "in_document_validation" && (
@@ -1446,7 +1487,18 @@ const OperatorView = ({
                         Verifique la documentación requerida para representación, empresa o poder notarial antes de aprobar.
                       </Alert>
                     )}
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1} flexWrap="wrap" useFlexGap>
+                    <Stack
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={1}
+                      flexWrap="wrap"
+                      useFlexGap
+                      sx={{
+                        "& > .MuiButton-root": {
+                          minHeight: 44,
+                          width: { xs: "100%", sm: "auto" },
+                        },
+                      }}
+                    >
                       <Button
                         variant="contained"
                         color="success"
@@ -1456,7 +1508,7 @@ const OperatorView = ({
                           )
                         }
                       >
-                        Confirmar aprobación
+                        Aprobar
                       </Button>
                       <Button
                         variant="outlined"
@@ -1467,7 +1519,7 @@ const OperatorView = ({
                           )
                         }
                       >
-                        Documentación incompleta
+                        Incompleto
                       </Button>
                       <Button
                         variant="outlined"
@@ -1499,10 +1551,22 @@ const OperatorView = ({
                             },
                           }}
                         >
-                          Reasignar a {windowItem.name}
+                          Reasignar
                         </Button>
                       ))}
-                    </Stack>
+                                {activeCase.isPriority && activeCase.priorityType ? (
+              <Button
+                variant="text"
+                sx={{ minHeight: 44 }}
+                onClick={() => {
+                  setPriorityDialogCase(activeCase);
+                  setSelectedPriorityType(activeCase.priorityType ?? "");
+                }}
+              >
+                Gestionar preferencial
+              </Button>
+            ) : null}
+</Stack>
                     {otherWindows.length > 0 && (
                       <Typography variant="body2" color="text.secondary">
                         Use la reasignación solo si el usuario corresponde a otra ventanilla. El turno conserva su código y hora de llegada.
@@ -1514,6 +1578,8 @@ const OperatorView = ({
             )}
           </Box>
         </Paper>
+          </Grid2>
+        </Grid2>
 
         <Accordion defaultExpanded disableGutters sx={accordionSectionSx}>
           <AccordionSummary
@@ -1575,9 +1641,18 @@ const OperatorView = ({
           </AccordionDetails>
         </Accordion>
       </Stack>
-      <Dialog open={Boolean(priorityDialogCase)} onClose={closePriorityDialog} fullWidth maxWidth="sm">
+      <Dialog
+        open={Boolean(priorityDialogCase) || priorityCreationOpen}
+        onClose={closePriorityDialog}
+        fullWidth
+        maxWidth="sm"
+      >
         <DialogTitle>
-          {priorityDialogCase?.isPriority ? "Atención preferencial" : "Crear atención preferencial"}
+          {priorityCreationOpen
+            ? "Crear turno preferencial"
+            : priorityDialogCase?.isPriority
+              ? "Atención preferencial"
+              : "Crear atención preferencial"}
         </DialogTitle>
         <DialogContent>
           {priorityDialogCase?.isPriority && priorityDialogCase.priorityType && (
@@ -1590,9 +1665,11 @@ const OperatorView = ({
           )}
           <FormControl sx={{ mt: 1, width: "100%" }}>
             <FormLabel id="priority-type-label">
-              {priorityDialogCase?.isPriority
-                ? "Cambiar motivo"
-                : "Seleccione el motivo por el que esta atención requiere prioridad."}
+              {priorityCreationOpen
+                ? "Seleccione el tipo de atención preferencial."
+                : priorityDialogCase?.isPriority
+                  ? "Cambiar motivo"
+                  : "Seleccione el motivo por el que esta atención requiere prioridad."}
             </FormLabel>
             <RadioGroup
               aria-labelledby="priority-type-label"
@@ -1629,12 +1706,26 @@ const OperatorView = ({
             variant="contained"
             disabled={
               !selectedPriorityType ||
-              !priorityDialogCase ||
-              (priorityDialogCase.isPriority &&
-                priorityDialogCase.priorityType === selectedPriorityType)
+              (!priorityCreationOpen &&
+                (!priorityDialogCase ||
+                  (priorityDialogCase.isPriority &&
+                    priorityDialogCase.priorityType === selectedPriorityType)))
             }
             onClick={() => {
-              if (!priorityDialogCase || !selectedPriorityType) return;
+              if (!selectedPriorityType) return;
+              if (priorityCreationOpen) {
+                setData((currentData) =>
+                  createPriorityArrival(
+                    currentData,
+                    operatorWindow.serviceType,
+                    selectedPriorityType,
+                    role,
+                  ),
+                );
+                closePriorityDialog();
+                return;
+              }
+              if (!priorityDialogCase) return;
               setData((currentData) =>
                 priorityDialogCase.isPriority
                   ? updateCasePriority(
@@ -1653,9 +1744,11 @@ const OperatorView = ({
               closePriorityDialog();
             }}
           >
-            {priorityDialogCase?.isPriority
-              ? "Cambiar motivo"
-              : "Crear atención preferencial"}
+            {priorityCreationOpen
+              ? "Crear turno"
+              : priorityDialogCase?.isPriority
+                ? "Cambiar motivo"
+                : "Crear atención preferencial"}
           </Button>
         </DialogActions>
       </Dialog>
