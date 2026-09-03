@@ -452,7 +452,7 @@ export const createArrival = (data: AppData, serviceType: ServiceType): AppData 
   const publicSequence = currentSequence + 1;
   const publicCode = formatPublicCode(assignedWindow.windowNumber, publicSequence);
   const caseId = `${center.shortCode}-${pad(session.nextGlobalArrivalSequence)}-${suffix()}`;
-  const publicToken = `${caseId.toLowerCase()}-${Math.random().toString(36).slice(2, 8)}`;
+  const publicToken = generatePublicToken();
 
   const caseRecord: CaseRecord = {
     caseId,
@@ -544,6 +544,8 @@ const transactionNonce = () => {
   return Array.from(values, (value) => value.toString(36)).join("-");
 };
 
+export const generatePublicToken = () => transactionNonce();
+
 export const createArrivalRealtime = async (
   data: AppData,
   serviceType: ServiceType,
@@ -562,7 +564,7 @@ export const createArrivalRealtime = async (
   const now = Date.now();
   const nonce = transactionNonce();
   const caseId = `${center.shortCode}-${session.date}-${nonce}`;
-  const publicToken = transactionNonce();
+  const publicToken = generatePublicToken();
   const eventId = `${now}-${transactionNonce()}`;
   const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
 
@@ -715,7 +717,7 @@ export const createPriorityArrivalRealtime = async (
   const now = Date.now();
   const nonce = transactionNonce();
   const caseId = `${center.shortCode}-${session.date}-${nonce}`;
-  const publicToken = transactionNonce();
+  const publicToken = generatePublicToken();
   const arrivalEventId = `${now}-${transactionNonce()}`;
   const priorityEventId = `${now}-${transactionNonce()}`;
   const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
