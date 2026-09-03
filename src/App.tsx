@@ -80,9 +80,9 @@ import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, Role, Se
 import { ccviBackgroundGradient, ccviPalette } from "./theme";
 import {
   calculateMetrics,
-  callNextForCashier,
+  callNextForCashierRealtime,
   callNextForOperatorRealtime,
-  completePayment,
+  completePaymentRealtime,
   createArrivalRealtime,
   createCenter,
   deleteCenter,
@@ -109,7 +109,7 @@ import {
   updateCasePriority,
   selectCenter,
   serviceLabels,
-  startCashierAttention,
+  startCashierAttentionRealtime,
   startValidationRealtime,
   stateLabels,
   finishDocumentValidationRealtime,
@@ -1939,7 +1939,10 @@ const CashierView = ({
                         : "Llamar el siguiente turno aprobado"
                   }
                   sx={{ mt: "auto" }}
-                  onClick={() => setData((currentData) => callNextForCashier(currentData, cashierId))}
+                  onClick={async () => {
+                    const next = await callNextForCashierRealtime(data, cashierId);
+                    setData(() => next);
+                  }}
                 >
                   Llamar siguiente
                 </Button>
@@ -2019,7 +2022,13 @@ const CashierView = ({
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                       <Button
                         variant="contained"
-                        onClick={() => setData((currentData) => startCashierAttention(currentData, active.queueItemId))}
+                        onClick={async () => {
+                          const next = await startCashierAttentionRealtime(
+                            data,
+                            active.queueItemId,
+                          );
+                          setData(() => next);
+                        }}
                       >
                         Iniciar atención
                       </Button>
@@ -2038,7 +2047,10 @@ const CashierView = ({
                         variant="contained"
                         color="success"
                         startIcon={<CheckCircle />}
-                        onClick={() => setData((currentData) => completePayment(currentData, active.queueItemId))}
+                        onClick={async () => {
+                          const next = await completePaymentRealtime(data, active.queueItemId);
+                          setData(() => next);
+                        }}
                       >
                         Pago completado
                       </Button>
