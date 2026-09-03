@@ -183,6 +183,7 @@ export const roleLabels: Record<Role, string> = {
   cashier3: "Caja 3",
   cashier4: "Caja 4",
   cashier5: "Caja 5",
+  cashier: "Caja",
   admin: "Administrador",
   display: "Monitor público",
 };
@@ -2672,7 +2673,7 @@ export const completePaymentRealtime = async (
 export const pausePayment = (
   data: AppData,
   queueItemId: string,
-  role: Role,
+  role: string,
   note: string | null = null,
 ): AppData => {
   const item = data.paymentQueue[queueItemId];
@@ -2795,7 +2796,7 @@ export const markNoShow = (data: AppData, queueItemId: string): AppData => {
 export const pausePaymentRealtime = async (
   data: AppData,
   queueItemId: string,
-  role: Role,
+  role: string,
   note: string | null = null,
 ): Promise<AppData> => {
   if (!database) return pausePayment(data, queueItemId, role, note);

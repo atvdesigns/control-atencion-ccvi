@@ -118,7 +118,11 @@ import {
 } from "./store";
 import {
   hasFirebaseConfig,
+  observeAuthSession,
+  signInWithUsername,
+  signOutCurrentUser,
   subscribeToOperationalDay,
+  type AuthSessionState,
   type OperationalDaySnapshot,
 } from "./services/firebase";
 
@@ -456,9 +460,12 @@ const printMetricsPdf = (center: CenterConfig, session: SessionMetadata, metrics
 
 const getRoleFromUrl = (): Role => {
   const raw = new URLSearchParams(window.location.search).get("role");
-  return roleOptions.includes(raw as Role)
-    ? (raw as Role)
-    : ((window.localStorage.getItem("ccvi-role") as Role | null) ?? "kiosk");
+  const stored = window.localStorage.getItem("ccvi-role") as Role | null;
+  return raw === "display" || raw === "kiosk"
+    ? raw
+    : stored === "display" || stored === "kiosk"
+      ? stored
+      : "kiosk";
 };
 
 const Header = ({
@@ -466,13 +473,20 @@ const Header = ({
   data,
   setRole,
   setData,
+  allowedCenterIds,
+  onLogout,
 }: {
   role: Role;
   data: AppData;
   setRole: (role: Role) => void;
   setData: (updater: (data: AppData) => AppData) => void;
+  allowedCenterIds?: string[];
+  onLogout?: () => void;
 }) => {
   const center = getCurrentCenter(data);
+  const centerOptions = Object.values(data.centers).filter(
+    (centerOption) => !allowedCenterIds || allowedCenterIds.includes(centerOption.centerId),
+  );
 
   return (
     <AppBar
@@ -502,20 +516,20 @@ const Header = ({
           </Typography>
         </Box>
         <Chip label={hasFirebaseConfig ? "Firebase listo" : "Demo local"} color="secondary" />
-        <HeaderSelect label="Rol" minWidth={220}>
+        {!onLogout && <HeaderSelect label="Rol" minWidth={220}>
           <Select
             value={role}
             onChange={(event) => setRole(event.target.value as Role)}
             displayEmpty
             inputProps={{ "aria-label": "Seleccionar rol de la aplicación" }}
           >
-            {roleOptions.map((option) => (
+            {roleOptions.filter((option) => option === "kiosk" || option === "display").map((option) => (
               <MenuItem key={option} value={option}>
                 {roleLabels[option]}
               </MenuItem>
             ))}
           </Select>
-        </HeaderSelect>
+        </HeaderSelect>}
         <HeaderSelect label="Centro" minWidth={280}>
           <Select
             value={data.selectedCenterId}
@@ -523,13 +537,14 @@ const Header = ({
             displayEmpty
             inputProps={{ "aria-label": "Seleccionar centro de atención" }}
           >
-            {Object.values(data.centers).map((centerOption) => (
+            {centerOptions.map((centerOption) => (
               <MenuItem key={centerOption.centerId} value={centerOption.centerId}>
                 {centerOption.name}
               </MenuItem>
             ))}
           </Select>
         </HeaderSelect>
+        {onLogout && <Button color="inherit" onClick={onLogout}>Cerrar sesión</Button>}
       </Toolbar>
     </AppBar>
   );
@@ -1862,16 +1877,15 @@ const OperatorView = ({
 };
 
 const CashierView = ({
-  role,
+  cashierId,
   data,
   setData,
 }: {
-  role: Role;
+  cashierId: string;
   data: AppData;
   setData: (updater: (data: AppData) => AppData) => void;
 }) => {
   const center = getCurrentCenter(data);
-  const cashierId = role;
   const [paymentIssue, setPaymentIssue] = useState<{ queueItemId: string; publicCode: string } | null>(null);
   const waitingCount = Object.values(data.paymentQueue).filter(
     (item) => item.centerId === data.selectedCenterId && item.state === "waiting_cashier",
@@ -1890,7 +1904,7 @@ const CashierView = ({
 
   return (
     <Page
-      title={roleLabels[role]}
+      title={center.cashiers.find((cashier) => cashier.cashierId === cashierId)?.name ?? "Caja"}
       description="Llama el siguiente turno aprobado, retira la carpeta física indicada y registra la atención cuando la persona se presente en caja."
     >
       <Grid container spacing={3} alignItems="stretch">
@@ -2153,7 +2167,7 @@ const CashierView = ({
           if (!paymentIssue) return;
           const queueItemId = paymentIssue.queueItemId;
           setPaymentIssue(null);
-          const next = await pausePaymentRealtime(data, queueItemId, role, note);
+          const next = await pausePaymentRealtime(data, queueItemId, cashierId, note);
           setData(() => next);
         }}
       />
@@ -3586,11 +3600,28 @@ const App = () => {
     useState<OperationalDaySnapshot | null>(null);
   const [role, setRoleState] = useState<Role>(() => getRoleFromUrl());
   const [snackbar, setSnackbar] = useState<string | null>(null);
+  const [authSession, setAuthSession] = useState<AuthSessionState>({
+    status: "loading",
+    user: null,
+    profile: null,
+  });
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const publicToken = useMemo(() => {
     const match = window.location.pathname.match(/^\/turno\/(.+)$/);
     return match?.[1] ?? null;
   }, []);
+  const requestedRole = useMemo(
+    () => new URLSearchParams(window.location.search).get("role"),
+    [],
+  );
+  const privateAccessRequested = Boolean(
+    requestedRole && requestedRole !== "kiosk" && requestedRole !== "display",
+  );
+
+  useEffect(() => observeAuthSession(setAuthSession), []);
 
   const setData = (updater: (data: AppData) => AppData) => {
     setDataState((current) => {
@@ -3622,41 +3653,112 @@ const App = () => {
 
   const selectedCenterId = data.selectedCenterId;
   const selectedDayId = getCurrentSession(data)?.date;
+  const authenticatedProfile = authSession.status === "authenticated"
+    ? authSession.profile
+    : null;
+  const hasAuthorizedCenter = Boolean(
+    authenticatedProfile?.centerIds.includes(selectedCenterId),
+  );
+
+  useEffect(() => {
+    if (!authenticatedProfile || hasAuthorizedCenter) return;
+    const firstAuthorizedCenterId = authenticatedProfile.centerIds.find(
+      (centerId) => Boolean(data.centers[centerId]),
+    );
+    if (firstAuthorizedCenterId) {
+      setData((current) => selectCenter(current, firstAuthorizedCenterId));
+    }
+  }, [authenticatedProfile, data.centers, hasAuthorizedCenter]);
 
   useEffect(() => {
     setRemoteOperationalDay(null);
     if (!selectedDayId) return;
+    if (authenticatedProfile && !hasAuthorizedCenter) return;
 
     return subscribeToOperationalDay(
       selectedCenterId,
       selectedDayId,
       setRemoteOperationalDay,
     );
-  }, [selectedCenterId, selectedDayId]);
+  }, [authenticatedProfile, hasAuthorizedCenter, selectedCenterId, selectedDayId]);
 
   if (publicToken) {
     return <PublicStatusView data={data} token={publicToken} />;
   }
 
-  const activeOperatorWindow = role.startsWith("operator")
-    ? windowForRole(getCurrentCenter(data), role)
+  if (privateAccessRequested && authSession.status !== "authenticated") {
+    if (authSession.status === "loading") {
+      return <Page title="Acceso privado"><Typography>Cargando sesión...</Typography></Page>;
+    }
+    if (authSession.status === "unauthorized") {
+      return (
+        <Page title="Acceso no autorizado">
+          <Typography>Su cuenta no tiene un perfil habilitado para acceder.</Typography>
+          <Button variant="contained" onClick={() => void signOutCurrentUser()}>Cerrar sesión</Button>
+        </Page>
+      );
+    }
+    return (
+      <Page title="Ingresar">
+        <Box
+          component="form"
+          sx={{ maxWidth: 420, display: "grid", gap: 2 }}
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setLoginError(null);
+            try {
+              await signInWithUsername(username, password);
+              setPassword("");
+            } catch {
+              setLoginError("No pudimos iniciar sesión. Revise sus credenciales e intente nuevamente.");
+            }
+          }}
+        >
+          <TextField label="Usuario" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
+          <TextField label="Contraseña" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
+          {loginError && <Alert severity="error">{loginError}</Alert>}
+          <Button type="submit" variant="contained">Ingresar</Button>
+        </Box>
+      </Page>
+    );
+  }
+
+  if (authenticatedProfile && !hasAuthorizedCenter) {
+    return <Page title="Centro no disponible"><Alert severity="warning">Su cuenta no tiene centros habilitados disponibles.</Alert></Page>;
+  }
+
+  const effectiveRole: Role = authenticatedProfile?.role ?? role;
+  const privateData = authenticatedProfile
+    ? {
+        ...data,
+        centers: Object.fromEntries(
+          Object.entries(data.centers).filter(([centerId]) =>
+            authenticatedProfile.centerIds.includes(centerId),
+          ),
+        ),
+      }
+    : data;
+
+  const activeOperatorWindow = effectiveRole.startsWith("operator")
+    ? windowForRole(getCurrentCenter(privateData), effectiveRole)
     : null;
 
   return (
     <>
-      <Header role={role} data={data} setRole={setRole} setData={setData} />
-      {role === "kiosk" && <KioskView data={data} setData={setData} />}
-      {role.startsWith("operator") && activeOperatorWindow && (
-        <OperatorView operatorWindow={activeOperatorWindow} role={role} data={data} setData={setData} />
+      <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? () => void signOutCurrentUser() : undefined} />
+      {effectiveRole === "kiosk" && <KioskView data={data} setData={setData} />}
+      {effectiveRole.startsWith("operator") && activeOperatorWindow && (
+        <OperatorView operatorWindow={activeOperatorWindow} role={effectiveRole} data={privateData} setData={setData} />
       )}
-      {role.startsWith("operator") && !activeOperatorWindow && (
+      {effectiveRole.startsWith("operator") && !activeOperatorWindow && (
         <Page title="Ventanilla no disponible">
           <Alert severity="warning">Esta ventanilla no está configurada para el centro seleccionado.</Alert>
         </Page>
       )}
-      {role.startsWith("cashier") && <CashierView role={role} data={data} setData={setData} />}
-      {role === "display" && <DisplayView data={data} />}
-      {role === "admin" && <AdminView data={data} setData={setData} />}
+      {effectiveRole === "cashier" && authenticatedProfile?.cashierId && <CashierView cashierId={authenticatedProfile.cashierId} data={privateData} setData={setData} />}
+      {effectiveRole === "cashier" && !authenticatedProfile?.cashierId && <Page title="Caja no asignada"><Alert severity="warning">Su cuenta no tiene una caja asignada.</Alert></Page>}
+      {effectiveRole === "display" && <DisplayView data={data} />}
+      {effectiveRole === "admin" && <AdminView data={privateData} setData={setData} />}
       <Snackbar
         open={Boolean(snackbar)}
         autoHideDuration={2400}
@@ -3694,7 +3796,7 @@ const App = () => {
             borderColor: ccviPalette.navy,
             boxShadow: "0 10px 24px rgba(17, 27, 50, 0.16)",
           },
-          display: role === "admin" ? "inline-flex" : "none",
+          display: effectiveRole === "admin" ? "inline-flex" : "none",
         }}
       >
         <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>

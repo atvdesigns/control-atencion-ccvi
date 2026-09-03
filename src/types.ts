@@ -49,6 +49,7 @@ export type Role =
   | "cashier3"
   | "cashier4"
   | "cashier5"
+  | "cashier"
   | "admin"
   | "display";
 
