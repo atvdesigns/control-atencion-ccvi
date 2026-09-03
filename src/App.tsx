@@ -81,7 +81,7 @@ import { ccviBackgroundGradient, ccviPalette } from "./theme";
 import {
   calculateMetrics,
   callNextForCashier,
-  callNextForOperator,
+  callNextForOperatorRealtime,
   completePayment,
   createArrivalRealtime,
   createCenter,
@@ -110,9 +110,9 @@ import {
   selectCenter,
   serviceLabels,
   startCashierAttention,
-  startValidation,
+  startValidationRealtime,
   stateLabels,
-  finishDocumentValidation,
+  finishDocumentValidationRealtime,
   updateCenter,
   windowForRole,
 } from "./store";
@@ -1357,11 +1357,14 @@ const OperatorView = ({
                   variant="contained"
                   color="secondary"
                   startIcon={<PlayArrow />}
-                  onClick={() =>
-                    setData((currentData) =>
-                      callNextForOperator(currentData, operatorWindow.windowId, role),
-                    )
-                  }
+                  onClick={async () => {
+                    const next = await callNextForOperatorRealtime(
+                      data,
+                      operatorWindow.windowId,
+                      role,
+                    );
+                    setData(() => next);
+                  }}
                   disabled={Boolean(activeCase) || waitingCases.length === 0}
                         sx={{ width: "100%", flex: 1, minHeight: 48 }}
                       >
@@ -1443,11 +1446,14 @@ const OperatorView = ({
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                     <Button
                       variant="contained"
-                      onClick={() =>
-                        setData((currentData) =>
-                          startValidation(currentData, activeCase.caseId, role),
-                        )
-                      }
+                      onClick={async () => {
+                        const next = await startValidationRealtime(
+                          data,
+                          activeCase.caseId,
+                          role,
+                        );
+                        setData(() => next);
+                      }}
                     >
                       Iniciar validación
                     </Button>
@@ -1500,22 +1506,30 @@ const OperatorView = ({
                       <Button
                         variant="contained"
                         color="success"
-                        onClick={() =>
-                          setData((currentData) =>
-                            finishDocumentValidation(currentData, activeCase.caseId, "approved", role),
-                          )
-                        }
+                        onClick={async () => {
+                          const next = await finishDocumentValidationRealtime(
+                            data,
+                            activeCase.caseId,
+                            "approved",
+                            role,
+                          );
+                          setData(() => next);
+                        }}
                       >
                         Aprobar
                       </Button>
                       <Button
                         variant="outlined"
                         color="warning"
-                        onClick={() =>
-                          setData((currentData) =>
-                            finishDocumentValidation(currentData, activeCase.caseId, "incomplete", role),
-                          )
-                        }
+                        onClick={async () => {
+                          const next = await finishDocumentValidationRealtime(
+                            data,
+                            activeCase.caseId,
+                            "incomplete",
+                            role,
+                          );
+                          setData(() => next);
+                        }}
                       >
                         Incompleto
                       </Button>
@@ -1809,21 +1823,22 @@ const OperatorView = ({
           <Button
             variant="contained"
             color="error"
-            onClick={() => {
+            onClick={async () => {
               if (!rejectionDialogCase) return;
-              setData((currentData) =>
-                finishDocumentValidation(
-                  currentData,
-                  rejectionDialogCase.caseId,
-                  "rejected",
-                  role,
-                  {
-                    customerName: rejectedCustomerName,
-                    customerPhone: rejectedCustomerPhone,
-                  },
-                ),
-              );
+              const rejectedCaseId = rejectionDialogCase.caseId;
+              const rejectedContact = {
+                customerName: rejectedCustomerName,
+                customerPhone: rejectedCustomerPhone,
+              };
               closeRejectionDialog();
+              const next = await finishDocumentValidationRealtime(
+                data,
+                rejectedCaseId,
+                "rejected",
+                role,
+                rejectedContact,
+              );
+              setData(() => next);
             }}
           >
             Guardar y rechazar
