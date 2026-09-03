@@ -17,7 +17,16 @@ import {
   normalizeDocumentaryRequirements,
   normalizePaymentMethods,
 } from "./centerJourneyConfig";
-import { database, ref, runTransaction } from "./services/firebase";
+import {
+  database,
+  publicDisplayEntryUpdate,
+  publicTurnStatusUpdate,
+  ref,
+  runTransaction,
+  toPublicDisplayEntry,
+  toPublicTurnStatus,
+  update,
+} from "./services/firebase";
 
 const STORAGE_KEY = "ccvi-control-atencion-demo-v2-3";
 
@@ -531,6 +540,26 @@ const collectionRecord = <T>(value: unknown): Record<string, T> => {
   return { ...(value as Record<string, T>) };
 };
 
+const syncPublicCaseProjection = async (
+  caseItem: CaseRecord,
+  center: CenterConfig,
+  dayId: string,
+) => {
+  if (!database) return;
+  await update(ref(database), {
+    ...publicTurnStatusUpdate(
+      caseItem.publicToken,
+      toPublicTurnStatus(caseItem, center),
+    ),
+    ...publicDisplayEntryUpdate(
+      caseItem.centerId,
+      dayId,
+      caseItem.caseId,
+      toPublicDisplayEntry(caseItem, center),
+    ),
+  });
+};
+
 const transactionNonce = () => {
   const cryptoApi = globalThis.crypto;
   if (!cryptoApi) throw new Error("SECURE_RANDOM_UNAVAILABLE");
@@ -675,6 +704,8 @@ export const createArrivalRealtime = async (
   const committedMetadata = committedDay?.metadata;
 
   if (!committedCase || !committedEvent || !committedMetadata) return base;
+
+  await syncPublicCaseProjection(committedCase, center, session.date);
 
   return {
     ...base,
@@ -842,6 +873,8 @@ export const createPriorityArrivalRealtime = async (
   const priorityEvent = committedEvents[priorityEventId];
   const committedMetadata = committedDay?.metadata;
   if (!committedCase || !arrivalEvent || !priorityEvent || !committedMetadata) return base;
+
+  await syncPublicCaseProjection(committedCase, center, session.date);
 
   return {
     ...base,
@@ -1211,6 +1244,14 @@ export const callNextForOperatorRealtime = async (
   const committedMetadata = committedDay?.metadata;
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedDay?.cases || !committedMetadata || !committedEvent) return base;
+  const committedCase = committedDay.cases[committedEvent.caseId];
+  if (!committedCase) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
 
   return {
     ...base,
@@ -1310,6 +1351,12 @@ export const startValidationRealtime = async (
   const committedCase = committedDay?.cases?.[caseId];
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedCase || !committedEvent) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
 
   return {
     ...base,
@@ -2125,6 +2172,8 @@ export const finishDocumentValidationRealtime = async (
     .map((eventId) => committedEvents[eventId])
     .filter((eventItem): eventItem is TraceEvent => Boolean(eventItem));
   if (nextEvents.length !== eventIds.length) return base;
+
+  await syncPublicCaseProjection(committedCase, center, session.date);
 
   const nextData: AppData = {
     ...base,
