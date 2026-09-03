@@ -1443,6 +1443,12 @@ export const markWindowNoShowRealtime = async (
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedCase || !committedEvent) return base;
 
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
+
   return {
     ...base,
     cases: { ...base.cases, [caseId]: committedCase },
@@ -1681,10 +1687,10 @@ export const markCaseAsPriorityRealtime = async (
     { applyLocally: false },
   );
   const current = result.snapshot.val() as CaseRecord | null;
+  if (!result.committed || !current) return base;
 
-  return result.committed && current
-    ? mergeRealtimePriorityCase(base, current)
-    : base;
+  await syncPublicCaseProjection(current, getCurrentCenter(base), session.date);
+  return mergeRealtimePriorityCase(base, current);
 };
 
 export const updateCasePriorityRealtime = async (
@@ -1723,10 +1729,10 @@ export const updateCasePriorityRealtime = async (
     { applyLocally: false },
   );
   const current = result.snapshot.val() as CaseRecord | null;
+  if (!result.committed || !current) return base;
 
-  return result.committed && current
-    ? mergeRealtimePriorityCase(base, current)
-    : base;
+  await syncPublicCaseProjection(current, getCurrentCenter(base), session.date);
+  return mergeRealtimePriorityCase(base, current);
 };
 
 export const removeCasePriorityRealtime = async (
@@ -1763,10 +1769,10 @@ export const removeCasePriorityRealtime = async (
     { applyLocally: false },
   );
   const current = result.snapshot.val() as CaseRecord | null;
+  if (!result.committed || !current) return base;
 
-  return result.committed && current
-    ? mergeRealtimePriorityCase(base, current)
-    : base;
+  await syncPublicCaseProjection(current, getCurrentCenter(base), session.date);
+  return mergeRealtimePriorityCase(base, current);
 };
 
 export const reassignCase = (
@@ -1878,6 +1884,12 @@ export const reassignCaseRealtime = async (
   const committedCase = committedDay?.cases?.[caseId];
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedCase || !committedEvent) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
 
   return {
     ...base,
@@ -2425,6 +2437,14 @@ export const callNextForCashierRealtime = async (
   ) {
     return base;
   }
+  const committedCase = committedDay.cases[committedEvent.caseId];
+  if (!committedCase) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
 
   return {
     ...base,
@@ -2611,6 +2631,14 @@ export const startCashierAttentionRealtime = async (
   const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
+  const committedCase = committedDay.cases[committedEvent.caseId];
+  if (!committedCase) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
 
   return {
     ...base,
@@ -2712,6 +2740,14 @@ export const completePaymentRealtime = async (
   const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
+  const committedCase = committedDay.cases[committedEvent.caseId];
+  if (!committedCase) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
 
   return {
     ...base,
@@ -2919,6 +2955,14 @@ export const pausePaymentRealtime = async (
   const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
+  const committedCase = committedDay.cases[committedEvent.caseId];
+  if (!committedCase) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
   return {
     ...base,
     cases: { ...base.cases, ...committedDay.cases },
@@ -3014,6 +3058,14 @@ export const resumePausedPaymentRealtime = async (
   const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
+  const committedCase = committedDay.cases[committedEvent.caseId];
+  if (!committedCase) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
   return {
     ...base,
     cases: { ...base.cases, ...committedDay.cases },
@@ -3093,6 +3145,14 @@ export const markNoShowRealtime = async (
   const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
   const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
   if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
+  const committedCase = committedDay.cases[committedEvent.caseId];
+  if (!committedCase) return base;
+
+  await syncPublicCaseProjection(
+    committedCase,
+    getCurrentCenter(base),
+    session.date,
+  );
   return {
     ...base,
     cases: { ...base.cases, ...committedDay.cases },
