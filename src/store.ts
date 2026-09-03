@@ -690,6 +690,167 @@ export const createArrivalRealtime = async (
   };
 };
 
+export const createPriorityArrivalRealtime = async (
+  data: AppData,
+  serviceType: ServiceType,
+  priorityType: PriorityType,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) return createPriorityArrival(data, serviceType, priorityType, role);
+
+  const base = ensureSession(data);
+  const center = getCurrentCenter(base);
+  const session = getCurrentSession(base);
+  const assignedWindow = firstEnabledWindowFor(center, serviceType);
+  if (
+    !assignedWindow ||
+    session.status !== "open" ||
+    !isCenterOpenForTickets(center) ||
+    !["operator-window-1", "operator-window-2"].includes(role)
+  ) {
+    return base;
+  }
+
+  const now = Date.now();
+  const nonce = transactionNonce();
+  const caseId = `${center.shortCode}-${session.date}-${nonce}`;
+  const publicToken = transactionNonce();
+  const arrivalEventId = `${now}-${transactionNonce()}`;
+  const priorityEventId = `${now}-${transactionNonce()}`;
+  const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
+
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      const currentDay = currentValue ?? {};
+      const currentMetadata = currentDay.metadata ?? {};
+      if (currentMetadata.status === "closed") return;
+
+      const windowSequences = collectionRecord<number>(currentMetadata.windowSequences);
+      const storedSequence = windowSequences[assignedWindow.windowId];
+      const currentSequence =
+        Number.isSafeInteger(storedSequence) && storedSequence >= 0 ? storedSequence : 0;
+      const publicSequence = currentSequence + 1;
+      const publicCode = formatPublicCode(assignedWindow.windowNumber, publicSequence);
+      const storedGlobalSequence = currentMetadata.nextGlobalArrivalSequence;
+      const globalArrivalSequence =
+        typeof storedGlobalSequence === "number" &&
+        Number.isSafeInteger(storedGlobalSequence) &&
+        storedGlobalSequence >= 1
+          ? storedGlobalSequence
+          : 1;
+      const caseRecord: CaseRecord = {
+        caseId,
+        publicToken,
+        centerId: center.centerId,
+        sessionId: session.sessionId,
+        publicCode,
+        globalArrivalSequence,
+        publicSequence,
+        serviceType,
+        serviceLabel: assignedWindow.serviceLabel,
+        validationLevel: assignedWindow.validationLevel,
+        personKind: "not_specified",
+        assignedWindowId: assignedWindow.windowId,
+        assignedWindowNumber: assignedWindow.windowNumber,
+        assignedOperatorId: null,
+        isPriority: true,
+        priorityType,
+        priorityCreatedBy: role,
+        priorityCreatedAt: now,
+        currentState: "waiting_document_validation",
+        arrivalAt: now,
+        calledToWindowAt: null,
+        documentValidationStartedAt: null,
+        documentValidationCompletedAt: null,
+        documentStatus: "pending",
+        optionalInternalNote: null,
+        folderCode: null,
+        paymentQueueNumber: null,
+        paymentTicketId: null,
+        cashierId: null,
+        calledToCashierAt: null,
+        cashierStartedAt: null,
+        paymentCompletedAt: null,
+        completedAt: null,
+        updatedAt: now,
+      };
+      const arrivalEvent: TraceEvent = {
+        eventId: arrivalEventId,
+        centerId: center.centerId,
+        sessionId: session.sessionId,
+        caseId,
+        actorRole: role,
+        actorId: role,
+        action: "arrival_created",
+        fromState: null,
+        toState: "waiting_document_validation",
+        timestamp: now,
+        optionalNote: null,
+      };
+      const priorityEvent: TraceEvent = {
+        eventId: priorityEventId,
+        centerId: center.centerId,
+        sessionId: session.sessionId,
+        caseId,
+        actorRole: role,
+        actorId: role,
+        action: "priority_created",
+        fromState: "waiting_document_validation",
+        toState: "waiting_document_validation",
+        timestamp: now,
+        optionalNote: priorityType,
+      };
+
+      return {
+        ...currentDay,
+        metadata: {
+          ...session,
+          ...currentMetadata,
+          sessionId: session.sessionId,
+          centerId: center.centerId,
+          date: session.date,
+          status: "open",
+          nextGlobalArrivalSequence: globalArrivalSequence + 1,
+          windowSequences: {
+            ...windowSequences,
+            [assignedWindow.windowId]: publicSequence,
+          },
+        },
+        cases: {
+          ...collectionRecord<CaseRecord>(currentDay.cases),
+          [caseId]: caseRecord,
+        },
+        events: {
+          ...collectionRecord<TraceEvent>(currentDay.events),
+          [arrivalEventId]: arrivalEvent,
+          [priorityEventId]: priorityEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedCase = committedDay?.cases?.[caseId];
+  const committedEvents = collectionRecord<TraceEvent>(committedDay?.events);
+  const arrivalEvent = committedEvents[arrivalEventId];
+  const priorityEvent = committedEvents[priorityEventId];
+  const committedMetadata = committedDay?.metadata;
+  if (!committedCase || !arrivalEvent || !priorityEvent || !committedMetadata) return base;
+
+  return {
+    ...base,
+    sessions: {
+      ...base.sessions,
+      [session.sessionId]: { ...session, ...committedMetadata },
+    },
+    cases: { ...base.cases, [caseId]: committedCase },
+    events: [priorityEvent, arrivalEvent, ...base.events],
+  };
+};
+
 export const createCenter = (
   data: AppData,
   name: string,

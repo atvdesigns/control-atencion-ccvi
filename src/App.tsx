@@ -83,7 +83,7 @@ import {
   callNextForCashier,
   callNextForOperator,
   completePayment,
-  createArrival,
+  createArrivalRealtime,
   createCenter,
   deleteCenter,
   formatServiceHours,
@@ -98,7 +98,7 @@ import {
   loadData,
   markWindowNoShow,
   markCaseAsPriority,
-  createPriorityArrival,
+  createPriorityArrivalRealtime,
   removeCasePriority,
   markNoShow,
   pausePayment,
@@ -984,34 +984,32 @@ const KioskView = ({
         .sort((a, b) => a.displayOrder - b.displayOrder)[0]
     : undefined;
 
-  const createTicket = (serviceType: ServiceType) => {
+  const createTicket = async (serviceType: ServiceType) => {
     if (creatingTicketRef.current) return;
     creatingTicketRef.current = true;
 
-    setData((current) => {
-      const currentCenter = getCurrentCenter(current);
-      if (!isCenterOpenForTickets(currentCenter)) {
-        setPendingService(null);
-        creatingTicketRef.current = false;
-        return current;
-      }
+    const currentCenter = getCurrentCenter(data);
+    if (!isCenterOpenForTickets(currentCenter)) {
+      setPendingService(null);
+      creatingTicketRef.current = false;
+      return;
+    }
 
-      const previousCaseCount = Object.keys(current.cases).length;
-      const next = createArrival(current, serviceType);
-      if (Object.keys(next.cases).length === previousCaseCount) {
-        creatingTicketRef.current = false;
-        return next;
-      }
+    const previousCaseIds = new Set(Object.keys(data.cases));
+    try {
+      const next = await createArrivalRealtime(data, serviceType);
+      const created = Object.values(next.cases)
+        .filter((item) => !previousCaseIds.has(item.caseId))
+        .sort((a, b) => b.arrivalAt - a.arrivalAt)[0];
+      if (!created) return;
 
-      const created = Object.values(next.cases).sort((a, b) => b.arrivalAt - a.arrivalAt)[0];
+      setData(() => next);
       setLastCase(created);
       setRemainingSeconds(currentCenter.kioskTimeoutSeconds);
       setPendingService(null);
-      window.setTimeout(() => {
-        creatingTicketRef.current = false;
-      }, 0);
-      return next;
-    });
+    } finally {
+      creatingTicketRef.current = false;
+    }
   };
 
   useEffect(() => {
@@ -1711,18 +1709,17 @@ const OperatorView = ({
                   (priorityDialogCase.isPriority &&
                     priorityDialogCase.priorityType === selectedPriorityType)))
             }
-            onClick={() => {
+            onClick={async () => {
               if (!selectedPriorityType) return;
               if (priorityCreationOpen) {
-                setData((currentData) =>
-                  createPriorityArrival(
-                    currentData,
-                    operatorWindow.serviceType,
-                    selectedPriorityType,
-                    role,
-                  ),
-                );
                 closePriorityDialog();
+                const next = await createPriorityArrivalRealtime(
+                  data,
+                  operatorWindow.serviceType,
+                  selectedPriorityType,
+                  role,
+                );
+                setData(() => next);
                 return;
               }
               if (!priorityDialogCase) return;
