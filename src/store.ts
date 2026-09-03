@@ -1334,6 +1334,158 @@ export const removeCasePriority = (
   };
 };
 
+const canManageCasePriorityRealtime = (
+  current: CaseRecord | null,
+  data: AppData,
+  sessionId: string,
+  role: Role,
+): current is CaseRecord =>
+  Boolean(
+    current &&
+      (role === "operator-window-1" || role === "operator-window-2") &&
+      current.centerId === data.selectedCenterId &&
+      current.sessionId === sessionId &&
+      [
+        "waiting_document_validation",
+        "called_to_window",
+        "in_document_validation",
+      ].includes(current.currentState),
+  );
+
+const mergeRealtimePriorityCase = (
+  data: AppData,
+  current: CaseRecord,
+): AppData => ({
+  ...data,
+  cases: {
+    ...data.cases,
+    [current.caseId]: current,
+  },
+});
+
+export const markCaseAsPriorityRealtime = async (
+  data: AppData,
+  caseId: string,
+  priorityType: PriorityType,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) {
+    return markCaseAsPriority(data, caseId, priorityType, role);
+  }
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const caseRef = ref(
+    database,
+    `days/${base.selectedCenterId}/${session.date}/cases/${caseId}`,
+  );
+  const result = await runTransaction(
+    caseRef,
+    (current: CaseRecord | null) => {
+      if (
+        !canManageCasePriorityRealtime(current, base, session.sessionId, role) ||
+        current.isPriority
+      ) {
+        return;
+      }
+
+      return {
+        ...current,
+        isPriority: true,
+        priorityType,
+      };
+    },
+    { applyLocally: false },
+  );
+  const current = result.snapshot.val() as CaseRecord | null;
+
+  return result.committed && current
+    ? mergeRealtimePriorityCase(base, current)
+    : base;
+};
+
+export const updateCasePriorityRealtime = async (
+  data: AppData,
+  caseId: string,
+  priorityType: PriorityType,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) {
+    return updateCasePriority(data, caseId, priorityType, role);
+  }
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const caseRef = ref(
+    database,
+    `days/${base.selectedCenterId}/${session.date}/cases/${caseId}`,
+  );
+  const result = await runTransaction(
+    caseRef,
+    (current: CaseRecord | null) => {
+      if (
+        !canManageCasePriorityRealtime(current, base, session.sessionId, role) ||
+        !current.isPriority ||
+        current.priorityType === priorityType
+      ) {
+        return;
+      }
+
+      return {
+        ...current,
+        isPriority: true,
+        priorityType,
+      };
+    },
+    { applyLocally: false },
+  );
+  const current = result.snapshot.val() as CaseRecord | null;
+
+  return result.committed && current
+    ? mergeRealtimePriorityCase(base, current)
+    : base;
+};
+
+export const removeCasePriorityRealtime = async (
+  data: AppData,
+  caseId: string,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) {
+    return removeCasePriority(data, caseId, role);
+  }
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const caseRef = ref(
+    database,
+    `days/${base.selectedCenterId}/${session.date}/cases/${caseId}`,
+  );
+  const result = await runTransaction(
+    caseRef,
+    (current: CaseRecord | null) => {
+      if (
+        !canManageCasePriorityRealtime(current, base, session.sessionId, role) ||
+        !current.isPriority
+      ) {
+        return;
+      }
+
+      return {
+        ...current,
+        isPriority: false,
+        priorityType: null,
+      };
+    },
+    { applyLocally: false },
+  );
+  const current = result.snapshot.val() as CaseRecord | null;
+
+  return result.committed && current
+    ? mergeRealtimePriorityCase(base, current)
+    : base;
+};
+
 export const reassignCase = (
   data: AppData,
   caseId: string,
@@ -1778,6 +1930,153 @@ export const callNextForCashier = (data: AppData, cashierId: string): AppData =>
   };
 };
 
+export const callNextForCashierRealtime = async (
+  data: AppData,
+  cashierId: string,
+): Promise<AppData> => {
+  if (!database) return callNextForCashier(data, cashierId);
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const now = Date.now();
+  const eventId = `${now}-${transactionNonce()}`;
+  const dayReference = ref(
+    database,
+    `days/${base.selectedCenterId}/${session.date}`,
+  );
+
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      if (!currentValue) return;
+
+      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
+      const remoteQueue = collectionRecord<PaymentQueueItem>(currentValue.paymentQueue);
+      const remoteSession = {
+        ...session,
+        ...(currentValue.metadata ?? {}),
+      } as typeof session;
+      const transactionData: AppData = {
+        ...base,
+        sessions: {
+          ...base.sessions,
+          [session.sessionId]: remoteSession,
+        },
+        cases: remoteCases,
+        paymentQueue: remoteQueue,
+      };
+
+      const cashierHasActiveCase = Object.values(remoteQueue).some(
+        (item) =>
+          item.centerId === base.selectedCenterId &&
+          item.sessionId === session.sessionId &&
+          item.cashierId === cashierId &&
+          (item.state === "called_to_cashier" || item.state === "in_cashier_attention"),
+      );
+      if (cashierHasActiveCase) return;
+
+      const next = nextCashierQueueItem(transactionData);
+      if (!next) return;
+
+      const relatedCase = remoteCases[next.caseId];
+      if (
+        !relatedCase ||
+        next.state !== "waiting_cashier" ||
+        relatedCase.currentState !== "waiting_cashier"
+      ) {
+        return;
+      }
+
+      const nextPriorityCount = relatedCase.isPriority
+        ? remoteSession.consecutivePriorityCasesForCashier + 1
+        : 0;
+      const updatedQueue: PaymentQueueItem = {
+        ...next,
+        state: "called_to_cashier",
+        cashierId,
+        reservedAt: now,
+        calledAt: now,
+        updatedAt: now,
+      };
+      const updatedCase: CaseRecord = {
+        ...relatedCase,
+        currentState: "called_to_cashier",
+        cashierId,
+        calledToCashierAt: now,
+        updatedAt: now,
+      };
+      const callEvent: TraceEvent = {
+        eventId,
+        centerId: relatedCase.centerId,
+        sessionId: relatedCase.sessionId,
+        caseId: relatedCase.caseId,
+        actorRole: cashierId,
+        actorId: cashierId,
+        action: "called_to_cashier",
+        fromState: relatedCase.currentState,
+        toState: updatedCase.currentState,
+        timestamp: now,
+        optionalNote: null,
+      };
+
+      return {
+        ...currentValue,
+        metadata: {
+          ...remoteSession,
+          consecutivePriorityCasesForCashier: nextPriorityCount,
+        },
+        cases: {
+          ...remoteCases,
+          [relatedCase.caseId]: updatedCase,
+        },
+        paymentQueue: {
+          ...remoteQueue,
+          [next.queueItemId]: updatedQueue,
+        },
+        events: {
+          ...collectionRecord<TraceEvent>(currentValue.events),
+          [eventId]: callEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedMetadata = committedDay?.metadata;
+  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
+  if (
+    !committedDay?.cases ||
+    !committedDay.paymentQueue ||
+    !committedMetadata ||
+    !committedEvent
+  ) {
+    return base;
+  }
+
+  return {
+    ...base,
+    sessions: {
+      ...base.sessions,
+      [session.sessionId]: {
+        ...session,
+        ...committedMetadata,
+      },
+    },
+    cases: {
+      ...base.cases,
+      ...committedDay.cases,
+    },
+    paymentQueue: {
+      ...base.paymentQueue,
+      ...committedDay.paymentQueue,
+    },
+    events: [committedEvent, ...base.events],
+  };
+};
+
 export const startCashierAttention = (data: AppData, queueItemId: string): AppData => {
   const item = data.paymentQueue[queueItemId];
   if (!item || item.state !== "called_to_cashier") return data;
@@ -1861,6 +2160,194 @@ export const completePayment = (data: AppData, queueItemId: string): AppData => 
       event(nextData, relatedCase.caseId, item.cashierId ?? "cashier", "payment_completed", "in_cashier_attention", "completed"),
       ...nextData.events,
     ],
+  };
+};
+
+export const startCashierAttentionRealtime = async (
+  data: AppData,
+  queueItemId: string,
+): Promise<AppData> => {
+  if (!database) return startCashierAttention(data, queueItemId);
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const now = Date.now();
+  const eventId = `${now}-${transactionNonce()}`;
+  const dayReference = ref(
+    database,
+    `days/${base.selectedCenterId}/${session.date}`,
+  );
+
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      if (!currentValue) return;
+
+      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
+      const remoteQueue = collectionRecord<PaymentQueueItem>(currentValue.paymentQueue);
+      const item = remoteQueue[queueItemId];
+      const relatedCase = item ? remoteCases[item.caseId] : undefined;
+      if (
+        !item ||
+        !relatedCase ||
+        item.state !== "called_to_cashier" ||
+        relatedCase.currentState !== "called_to_cashier" ||
+        !item.cashierId ||
+        relatedCase.cashierId !== item.cashierId
+      ) {
+        return;
+      }
+
+      const updatedCase: CaseRecord = {
+        ...relatedCase,
+        currentState: "in_cashier_attention",
+        cashierStartedAt: now,
+        updatedAt: now,
+      };
+      const updatedItem: PaymentQueueItem = {
+        ...item,
+        state: "in_cashier_attention",
+        startedAt: now,
+        updatedAt: now,
+      };
+      const startEvent: TraceEvent = {
+        eventId,
+        centerId: relatedCase.centerId,
+        sessionId: relatedCase.sessionId,
+        caseId: relatedCase.caseId,
+        actorRole: item.cashierId,
+        actorId: item.cashierId,
+        action: "cashier_attention_started",
+        fromState: relatedCase.currentState,
+        toState: updatedCase.currentState,
+        timestamp: now,
+        optionalNote: null,
+      };
+
+      return {
+        ...currentValue,
+        cases: { ...remoteCases, [relatedCase.caseId]: updatedCase },
+        paymentQueue: { ...remoteQueue, [queueItemId]: updatedItem },
+        events: {
+          ...collectionRecord<TraceEvent>(currentValue.events),
+          [eventId]: startEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
+  if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
+
+  return {
+    ...base,
+    cases: { ...base.cases, ...committedDay.cases },
+    paymentQueue: { ...base.paymentQueue, ...committedDay.paymentQueue },
+    events: [committedEvent, ...base.events],
+  };
+};
+
+export const completePaymentRealtime = async (
+  data: AppData,
+  queueItemId: string,
+): Promise<AppData> => {
+  if (!database) return completePayment(data, queueItemId);
+
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  const now = Date.now();
+  const eventId = `${now}-${transactionNonce()}`;
+  const dayReference = ref(
+    database,
+    `days/${base.selectedCenterId}/${session.date}`,
+  );
+
+  const result = await runTransaction(
+    dayReference,
+    (currentValue: RealtimeOperationalDay | null) => {
+      if (!currentValue) return;
+
+      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
+      const remoteQueue = collectionRecord<PaymentQueueItem>(currentValue.paymentQueue);
+      const item = remoteQueue[queueItemId];
+      const relatedCase = item ? remoteCases[item.caseId] : undefined;
+      if (
+        !item ||
+        !relatedCase ||
+        item.state !== "in_cashier_attention" ||
+        relatedCase.currentState !== "in_cashier_attention" ||
+        !item.cashierId ||
+        relatedCase.cashierId !== item.cashierId
+      ) {
+        return;
+      }
+
+      const center = base.centers[relatedCase.centerId];
+      const cashier = center?.cashiers.find(
+        (candidate) => candidate.cashierId === item.cashierId,
+      );
+      const cashierNameAtCompletion = cashier?.cashierName?.trim() || undefined;
+      const commissionRateApplied = center?.cashierCommissionRate;
+      const cashierDurationMs = relatedCase.cashierStartedAt === null
+        ? undefined
+        : Math.max(0, now - relatedCase.cashierStartedAt);
+      const updatedCase: CaseRecord = {
+        ...relatedCase,
+        currentState: "completed",
+        paymentCompletedAt: now,
+        cashierNameAtCompletion,
+        cashierDurationMs,
+        commissionRateApplied,
+        commissionAmount: commissionRateApplied,
+        completedAt: now,
+        updatedAt: now,
+      };
+      const updatedItem: PaymentQueueItem = {
+        ...item,
+        state: "completed",
+        completedAt: now,
+        updatedAt: now,
+      };
+      const completionEvent: TraceEvent = {
+        eventId,
+        centerId: relatedCase.centerId,
+        sessionId: relatedCase.sessionId,
+        caseId: relatedCase.caseId,
+        actorRole: item.cashierId,
+        actorId: item.cashierId,
+        action: "payment_completed",
+        fromState: relatedCase.currentState,
+        toState: updatedCase.currentState,
+        timestamp: now,
+        optionalNote: null,
+      };
+
+      return {
+        ...currentValue,
+        cases: { ...remoteCases, [relatedCase.caseId]: updatedCase },
+        paymentQueue: { ...remoteQueue, [queueItemId]: updatedItem },
+        events: {
+          ...collectionRecord<TraceEvent>(currentValue.events),
+          [eventId]: completionEvent,
+        },
+      } satisfies RealtimeOperationalDay;
+    },
+    { applyLocally: false },
+  );
+
+  if (!result.committed) return base;
+  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
+  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
+  if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
+
+  return {
+    ...base,
+    cases: { ...base.cases, ...committedDay.cases },
+    paymentQueue: { ...base.paymentQueue, ...committedDay.paymentQueue },
+    events: [committedEvent, ...base.events],
   };
 };
 
