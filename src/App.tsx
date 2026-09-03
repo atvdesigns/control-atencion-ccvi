@@ -118,6 +118,7 @@ import {
 } from "./store";
 import {
   hasFirebaseConfig,
+  getCenterConfigRealtime,
   removeCenterConfigRealtime,
   observeAuthSession,
   signInWithUsername,
@@ -3646,6 +3647,29 @@ const App = () => {
   useEffect(() => {
     saveData(data);
   }, [data]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const bootstrapCenterConfigs = async () => {
+      for (const center of Object.values(data.centers)) {
+        if (cancelled) return;
+        try {
+          const existingCenter = await getCenterConfigRealtime(center.centerId);
+          if (!cancelled && !existingCenter) {
+            await writeCenterConfigRealtime(center);
+          }
+        } catch {
+          console.error(`No se pudo sincronizar la configuración del centro ${center.centerId}.`);
+        }
+      }
+    };
+
+    void bootstrapCenterConfigs();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
