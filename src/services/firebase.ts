@@ -1,6 +1,14 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
 import {
+  getAuth,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+  type Auth,
+} from "firebase/auth";
+import {
   connectDatabaseEmulator,
+  get,
   getDatabase,
   onValue,
   ref,
@@ -10,8 +18,10 @@ import {
   type Database,
   type Unsubscribe,
 } from "firebase/database";
+import type { PrivateUserRole, UserProfile } from "../types";
 
 export { onValue, ref, runTransaction, set, update };
+export { onAuthStateChanged, signInWithEmailAndPassword, signOut };
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -29,10 +39,12 @@ export const useFirebaseEmulator =
 
 export let firebaseApp: FirebaseApp | null = null;
 export let firebaseDatabase: Database | null = null;
+export let firebaseAuth: Auth | null = null;
 
 if (hasFirebaseConfig) {
   firebaseApp = initializeApp(firebaseConfig);
   firebaseDatabase = getDatabase(firebaseApp);
+  firebaseAuth = getAuth(firebaseApp);
 
   if (useFirebaseEmulator) {
     connectDatabaseEmulator(firebaseDatabase, "127.0.0.1", 9000);
@@ -40,6 +52,38 @@ if (hasFirebaseConfig) {
 }
 
 export const database = firebaseDatabase;
+export const auth = firebaseAuth;
+
+const privateUserRoles: PrivateUserRole[] = [
+  "admin",
+  "operator-window-1",
+  "operator-window-2",
+  "cashier",
+];
+
+export const getUserProfileRealtime = async (
+  uid: string,
+): Promise<UserProfile | null> => {
+  if (!database || !uid) return null;
+
+  const snapshot = await get(ref(database, `users/${uid}`));
+  if (!snapshot.exists()) return null;
+
+  const value = snapshot.val() as Partial<UserProfile> | null;
+  if (
+    !value ||
+    value.uid !== uid ||
+    !privateUserRoles.includes(value.role as PrivateUserRole) ||
+    !Array.isArray(value.centerIds) ||
+    !value.centerIds.every((centerId) => typeof centerId === "string") ||
+    typeof value.enabled !== "boolean" ||
+    (value.cashierId !== undefined && typeof value.cashierId !== "string")
+  ) {
+    return null;
+  }
+
+  return value as UserProfile;
+};
 
 export interface OperationalDaySnapshot {
   metadata?: unknown;

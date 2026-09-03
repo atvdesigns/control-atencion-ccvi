@@ -52,6 +52,20 @@ export type Role =
   | "admin"
   | "display";
 
+export type PrivateUserRole =
+  | "admin"
+  | "operator-window-1"
+  | "operator-window-2"
+  | "cashier";
+
+export interface UserProfile {
+  uid: string;
+  role: PrivateUserRole;
+  centerIds: string[];
+  cashierId?: string;
+  enabled: boolean;
+}
+
 export interface WindowConfig {
   windowId: string;
   centerId: string;
