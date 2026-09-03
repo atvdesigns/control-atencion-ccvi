@@ -96,17 +96,17 @@ import {
   isCenterOpenForTickets,
   getPublicStatusUrl,
   loadData,
-  markWindowNoShow,
-  markCaseAsPriority,
+  markWindowNoShowRealtime,
+  markCaseAsPriorityRealtime,
   createPriorityArrivalRealtime,
-  removeCasePriority,
-  markNoShow,
-  pausePayment,
-  reassignCase,
-  resumePausedPayment,
+  removeCasePriorityRealtime,
+  markNoShowRealtime,
+  pausePaymentRealtime,
+  reassignCaseRealtime,
+  resumePausedPaymentRealtime,
   roleLabels,
   saveData,
-  updateCasePriority,
+  updateCasePriorityRealtime,
   selectCenter,
   serviceLabels,
   startCashierAttentionRealtime,
@@ -1460,11 +1460,14 @@ const OperatorView = ({
                     <Button
                       variant="outlined"
                       color="warning"
-                      onClick={() =>
-                        setData((currentData) =>
-                          markWindowNoShow(currentData, activeCase.caseId, role),
-                        )
-                      }
+                      onClick={async () => {
+                        const next = await markWindowNoShowRealtime(
+                          data,
+                          activeCase.caseId,
+                          role,
+                        );
+                        setData(() => next);
+                      }}
                     >
                       No se presentó
                     </Button>
@@ -1544,11 +1547,15 @@ const OperatorView = ({
                         <Button
                           key={windowItem.windowId}
                           variant="outlined"
-                          onClick={() =>
-                            setData((currentData) =>
-                              reassignCase(currentData, activeCase.caseId, windowItem.windowId, role),
-                            )
-                          }
+                          onClick={async () => {
+                            const next = await reassignCaseRealtime(
+                              data,
+                              activeCase.caseId,
+                              windowItem.windowId,
+                              role,
+                            );
+                            setData(() => next);
+                          }}
                           sx={{
                             color: ccviPalette.text,
                             borderColor: "rgba(17, 27, 50, 0.34)",
@@ -1737,22 +1744,23 @@ const OperatorView = ({
                 return;
               }
               if (!priorityDialogCase) return;
-              setData((currentData) =>
-                priorityDialogCase.isPriority
-                  ? updateCasePriority(
-                      currentData,
-                      priorityDialogCase.caseId,
-                      selectedPriorityType,
-                      role,
-                    )
-                  : markCaseAsPriority(
-                      currentData,
-                      priorityDialogCase.caseId,
-                      selectedPriorityType,
-                      role,
-                    ),
-              );
+              const priorityCaseId = priorityDialogCase.caseId;
+              const priorityWasSet = priorityDialogCase.isPriority;
               closePriorityDialog();
+              const next = priorityWasSet
+                ? await updateCasePriorityRealtime(
+                    data,
+                    priorityCaseId,
+                    selectedPriorityType,
+                    role,
+                  )
+                : await markCaseAsPriorityRealtime(
+                    data,
+                    priorityCaseId,
+                    selectedPriorityType,
+                    role,
+                  );
+              setData(() => next);
             }}
           >
             {priorityCreationOpen
@@ -1778,12 +1786,16 @@ const OperatorView = ({
           <Button
             color="error"
             variant="contained"
-            onClick={() => {
+            onClick={async () => {
               if (!priorityRemovalCase) return;
-              setData((currentData) =>
-                removeCasePriority(currentData, priorityRemovalCase.caseId, role),
-              );
+              const priorityCaseId = priorityRemovalCase.caseId;
               setPriorityRemovalCase(null);
+              const next = await removeCasePriorityRealtime(
+                data,
+                priorityCaseId,
+                role,
+              );
+              setData(() => next);
             }}
           >
             Quitar atención preferencial
@@ -2035,7 +2047,10 @@ const CashierView = ({
                       <Button
                         variant="outlined"
                         color="warning"
-                        onClick={() => setData((currentData) => markNoShow(currentData, active.queueItemId))}
+                        onClick={async () => {
+                          const next = await markNoShowRealtime(data, active.queueItemId);
+                          setData(() => next);
+                        }}
                       >
                         No se presentó
                       </Button>
@@ -2110,9 +2125,14 @@ const CashierView = ({
                         <Button
                           variant="outlined"
                           disabled={Boolean(active)}
-                          onClick={() =>
-                            setData((currentData) => resumePausedPayment(currentData, item.queueItemId, cashierId))
-                          }
+                          onClick={async () => {
+                            const next = await resumePausedPaymentRealtime(
+                              data,
+                              item.queueItemId,
+                              cashierId,
+                            );
+                            setData(() => next);
+                          }}
                         >
                           Retomar atención
                         </Button>
@@ -2129,10 +2149,12 @@ const CashierView = ({
         open={Boolean(paymentIssue)}
         publicCode={paymentIssue?.publicCode ?? ""}
         onCancel={() => setPaymentIssue(null)}
-        onConfirm={(note) => {
+        onConfirm={async (note) => {
           if (!paymentIssue) return;
-          setData((currentData) => pausePayment(currentData, paymentIssue.queueItemId, role, note));
+          const queueItemId = paymentIssue.queueItemId;
           setPaymentIssue(null);
+          const next = await pausePaymentRealtime(data, queueItemId, role, note);
+          setData(() => next);
         }}
       />
     </Page>
