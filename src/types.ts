@@ -67,6 +67,30 @@ export interface UserProfile {
   enabled: boolean;
 }
 
+export interface PublicPaymentMethod {
+  label: string;
+  accepted: boolean;
+}
+
+export interface PublicTurnStatus {
+  publicCode: string;
+  status: string;
+  serviceType: ServiceType;
+  serviceLabel: string;
+  destination: string | null;
+  updatedAt: number;
+  requirements: string[];
+  paymentMethods: PublicPaymentMethod[];
+}
+
+export interface PublicDisplayEntry {
+  publicCode: string;
+  isPriority: boolean;
+  status: string;
+  destination: string;
+  updatedAt: number;
+}
+
 export interface WindowConfig {
   windowId: string;
   centerId: string;

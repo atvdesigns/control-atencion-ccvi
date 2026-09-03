@@ -19,7 +19,15 @@ import {
   type Database,
   type Unsubscribe,
 } from "firebase/database";
-import type { PrivateUserRole, UserProfile } from "../types";
+import { getPublicJourneyPresentation } from "../publicJourney";
+import type {
+  CaseRecord,
+  CenterConfig,
+  PrivateUserRole,
+  PublicDisplayEntry,
+  PublicTurnStatus,
+  UserProfile,
+} from "../types";
 
 export { onValue, ref, runTransaction, set, update };
 export { onAuthStateChanged, signInWithEmailAndPassword, signOut };
@@ -188,4 +196,129 @@ export const subscribeToOperationalDay = (
       events: value.events,
     });
   });
+};
+
+const publicPathSegment = (value: string) => {
+  if (!value || /[.#$[\]/]/.test(value)) {
+    throw new Error("INVALID_PUBLIC_PATH_SEGMENT");
+  }
+  return value;
+};
+
+const publicCashierDestination = (
+  caseItem: CaseRecord,
+  center: CenterConfig,
+) => {
+  if (!caseItem.cashierId) return null;
+  return center.cashiers.find((item) => item.cashierId === caseItem.cashierId)?.name ?? null;
+};
+
+export const toPublicTurnStatus = (
+  caseItem: CaseRecord,
+  center: CenterConfig,
+): PublicTurnStatus => {
+  const presentation = getPublicJourneyPresentation(
+    caseItem,
+    publicCashierDestination(caseItem, center),
+  );
+
+  return {
+    publicCode: caseItem.publicCode,
+    status: presentation.title,
+    serviceType: caseItem.serviceType,
+    serviceLabel: caseItem.serviceLabel,
+    destination: presentation.destination,
+    updatedAt: caseItem.updatedAt,
+    requirements: center.documentaryRequirements[caseItem.serviceType]
+      .filter((item) => item.enabled)
+      .map((item) => item.label),
+    paymentMethods: center.paymentMethods.map((item) => ({
+      label: item.label,
+      accepted: item.accepted,
+    })),
+  };
+};
+
+export const toPublicDisplayEntry = (
+  caseItem: CaseRecord,
+  center: CenterConfig,
+): PublicDisplayEntry | null => {
+  if (
+    ![
+      "called_to_window",
+      "in_document_validation",
+      "called_to_cashier",
+      "in_cashier_attention",
+    ].includes(caseItem.currentState)
+  ) {
+    return null;
+  }
+
+  const presentation = getPublicJourneyPresentation(
+    caseItem,
+    publicCashierDestination(caseItem, center),
+  );
+  if (!presentation.destination) return null;
+
+  return {
+    publicCode: caseItem.publicCode,
+    isPriority: caseItem.isPriority,
+    status: presentation.title,
+    destination: presentation.destination,
+    updatedAt: caseItem.updatedAt,
+  };
+};
+
+export const publicTurnStatusUpdate = (
+  publicToken: string,
+  status: PublicTurnStatus | null,
+) => ({
+  [`public/turns/${publicPathSegment(publicToken)}`]: status,
+});
+
+export const publicDisplayEntryUpdate = (
+  centerId: string,
+  dayId: string,
+  entryKey: string,
+  entry: PublicDisplayEntry | null,
+) => ({
+  [`public/displays/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}/${publicPathSegment(entryKey)}`]: entry,
+});
+
+export const writePublicTurnStatus = (
+  publicToken: string,
+  status: PublicTurnStatus,
+) => {
+  if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
+  return update(ref(database), publicTurnStatusUpdate(publicToken, status));
+};
+
+export const removePublicTurnStatus = (publicToken: string) => {
+  if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
+  return update(ref(database), publicTurnStatusUpdate(publicToken, null));
+};
+
+export const writePublicDisplayEntry = (
+  centerId: string,
+  dayId: string,
+  entryKey: string,
+  entry: PublicDisplayEntry,
+) => {
+  if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
+  return update(
+    ref(database),
+    publicDisplayEntryUpdate(centerId, dayId, entryKey, entry),
+  );
+};
+
+export const removePublicDisplayEntry = (
+  centerId: string,
+  dayId: string,
+  entryKey: string,
+) => {
+  if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
+  return update(
+    ref(database),
+    publicDisplayEntryUpdate(centerId, dayId, entryKey, null),
+  );
 };
