@@ -118,10 +118,12 @@ import {
 } from "./store";
 import {
   hasFirebaseConfig,
+  removeCenterConfigRealtime,
   observeAuthSession,
   signInWithUsername,
   signOutCurrentUser,
   subscribeToOperationalDay,
+  writeCenterConfigRealtime,
   type AuthSessionState,
   type OperationalDaySnapshot,
 } from "./services/firebase";
@@ -2884,20 +2886,20 @@ const AdminView = ({
       <CreateCenterDialog
         open={open}
         onClose={() => setOpen(false)}
-        onCreate={(name, code, representationWindows, ownerWindows, cashiers, serviceStartTime, serviceEndTime, cashierCommissionRate) => {
-          setData((current) =>
-            createCenter(
-              current,
-              name,
-              code,
-              representationWindows,
-              ownerWindows,
-              cashiers,
-              serviceStartTime,
-              serviceEndTime,
-              cashierCommissionRate,
-            ),
+        onCreate={async (name, code, representationWindows, ownerWindows, cashiers, serviceStartTime, serviceEndTime, cashierCommissionRate) => {
+          const nextData = createCenter(
+            data,
+            name,
+            code,
+            representationWindows,
+            ownerWindows,
+            cashiers,
+            serviceStartTime,
+            serviceEndTime,
+            cashierCommissionRate,
           );
+          await writeCenterConfigRealtime(nextData.centers[nextData.selectedCenterId]);
+          setData(() => nextData);
           setOpen(false);
         }}
       />
@@ -2906,14 +2908,14 @@ const AdminView = ({
           center={editingCenter}
           open={Boolean(editingCenter)}
           onClose={() => setEditingCenterId(null)}
-          onSave={(patch) => {
-            setData((current) =>
-              updateCenter(current, editingCenter.centerId, {
-                ...patch,
-                documentaryRequirements: editingCenter.documentaryRequirements,
-                paymentMethods: editingCenter.paymentMethods,
-              }),
-            );
+          onSave={async (patch) => {
+            const nextData = updateCenter(data, editingCenter.centerId, {
+              ...patch,
+              documentaryRequirements: editingCenter.documentaryRequirements,
+              paymentMethods: editingCenter.paymentMethods,
+            });
+            await writeCenterConfigRealtime(nextData.centers[editingCenter.centerId]);
+            setData(() => nextData);
             setEditingCenterId(null);
           }}
           canDelete={canDeleteCenters}
@@ -2925,8 +2927,12 @@ const AdminView = ({
           centerName={deletingCenter.name}
           open={Boolean(deletingCenter)}
           onCancel={() => setDeletingCenterId(null)}
-          onConfirm={() => {
-            setData((current) => deleteCenter(current, deletingCenter.centerId));
+          onConfirm={async () => {
+            const nextData = deleteCenter(data, deletingCenter.centerId);
+            if (nextData !== data) {
+              await removeCenterConfigRealtime(deletingCenter.centerId);
+              setData(() => nextData);
+            }
             setDeletingCenterId(null);
             setEditingCenterId(null);
           }}

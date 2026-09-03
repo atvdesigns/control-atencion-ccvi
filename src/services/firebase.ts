@@ -13,6 +13,7 @@ import {
   getDatabase,
   onValue,
   ref,
+  remove,
   runTransaction,
   set,
   update,
@@ -203,6 +204,40 @@ const publicPathSegment = (value: string) => {
     throw new Error("INVALID_PUBLIC_PATH_SEGMENT");
   }
   return value;
+};
+
+const withoutUndefined = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => withoutUndefined(item))
+      .filter((item) => item !== undefined);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .map(([key, item]) => [key, withoutUndefined(item)]),
+    );
+  }
+  return value;
+};
+
+const centerConfigReference = (centerId: string) => {
+  if (!database) throw new Error("FIREBASE_DATABASE_UNAVAILABLE");
+  return ref(database, `centers/${publicPathSegment(centerId)}`);
+};
+
+export const writeCenterConfigRealtime = (center: CenterConfig) =>
+  set(centerConfigReference(center.centerId), withoutUndefined(center));
+
+export const removeCenterConfigRealtime = (centerId: string) =>
+  remove(centerConfigReference(centerId));
+
+export const getCenterConfigRealtime = async (
+  centerId: string,
+): Promise<CenterConfig | null> => {
+  const snapshot = await get(centerConfigReference(centerId));
+  return snapshot.exists() ? (snapshot.val() as CenterConfig) : null;
 };
 
 const publicCashierDestination = (
