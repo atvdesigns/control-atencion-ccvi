@@ -3649,6 +3649,14 @@ const App = () => {
   }, [data]);
 
   useEffect(() => {
+    if (
+      authSession.status !== "authenticated" ||
+      !authSession.profile.enabled ||
+      authSession.profile.role !== "admin"
+    ) {
+      return;
+    }
+
     let cancelled = false;
 
     const bootstrapCenterConfigs = async () => {
@@ -3659,8 +3667,12 @@ const App = () => {
           if (!cancelled && !existingCenter) {
             await writeCenterConfigRealtime(center);
           }
-        } catch {
-          console.error(`No se pudo sincronizar la configuración del centro ${center.centerId}.`);
+        } catch (error) {
+          console.error(
+            "No se pudo sincronizar la configuración del centro",
+            center.centerId,
+            error,
+          );
         }
       }
     };
@@ -3669,7 +3681,7 @@ const App = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authSession]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
