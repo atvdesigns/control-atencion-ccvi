@@ -76,14 +76,13 @@ import {
   getPublicJourneyStep,
   isVisiblePublicCode,
 } from "./publicJourney";
-import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, Role, ServiceType, SessionMetadata } from "./types";
+import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, PublicTurnStatus, Role, ServiceType, SessionMetadata } from "./types";
 import { ccviBackgroundGradient, ccviPalette } from "./theme";
 import {
   calculateMetrics,
   callNextForCashierRealtime,
   callNextForOperatorRealtime,
   completePaymentRealtime,
-  createArrivalRealtime,
   createCenter,
   deleteCenter,
   formatServiceHours,
@@ -117,6 +116,7 @@ import {
   windowForRole,
 } from "./store";
 import {
+  createKioskArrivalCallable,
   hasFirebaseConfig,
   getCenterConfigRealtime,
   removeCenterConfigRealtime,
@@ -124,6 +124,7 @@ import {
   signInWithUsername,
   signOutCurrentUser,
   subscribeToOperationalDay,
+  subscribeToPublicTurnStatus,
   writeCenterConfigRealtime,
   type AuthSessionState,
   type OperationalDaySnapshot,
@@ -983,16 +984,20 @@ const EmptyState = ({ text }: { text: string }) => (
   </Card>
 );
 
-const KioskView = ({
-  data,
-  setData,
-}: {
-  data: AppData;
-  setData: (updater: (data: AppData) => AppData) => void;
-}) => {
+interface KioskIssuedTicket {
+  publicCode: string;
+  publicToken: string;
+  serviceLabel: string;
+  assignedWindowId: string;
+  assignedWindowNumber: number;
+}
+
+const KioskView = ({ data }: { data: AppData }) => {
   const center = getCurrentCenter(data);
-  const [lastCase, setLastCase] = useState<CaseRecord | null>(null);
+  const [lastCase, setLastCase] = useState<KioskIssuedTicket | null>(null);
   const [pendingService, setPendingService] = useState<ServiceType | null>(null);
+  const [creationError, setCreationError] = useState<string | null>(null);
+  const [isCreatingTicket, setIsCreatingTicket] = useState(false);
   const [remainingSeconds, setRemainingSeconds] = useState(center.kioskTimeoutSeconds);
   const creatingTicketRef = useRef(false);
   const centerIsOpen = isCenterOpenForTickets(center);
@@ -1005,28 +1010,37 @@ const KioskView = ({
   const createTicket = async (serviceType: ServiceType) => {
     if (creatingTicketRef.current) return;
     creatingTicketRef.current = true;
+    setIsCreatingTicket(true);
+    setCreationError(null);
 
     const currentCenter = getCurrentCenter(data);
     if (!isCenterOpenForTickets(currentCenter)) {
       setPendingService(null);
       creatingTicketRef.current = false;
+      setIsCreatingTicket(false);
       return;
     }
 
-    const previousCaseIds = new Set(Object.keys(data.cases));
     try {
-      const next = await createArrivalRealtime(data, serviceType);
-      const created = Object.values(next.cases)
-        .filter((item) => !previousCaseIds.has(item.caseId))
-        .sort((a, b) => b.arrivalAt - a.arrivalAt)[0];
-      if (!created) return;
+      const created = await createKioskArrivalCallable(currentCenter.centerId, serviceType);
+      const assignedWindow = currentCenter.windows
+        .filter((item) => item.enabled && item.serviceType === serviceType)
+        .sort((a, b) => a.displayOrder - b.displayOrder)[0];
+      if (!assignedWindow) return;
 
-      setData(() => next);
-      setLastCase(created);
+      setLastCase({
+        ...created,
+        serviceLabel: assignedWindow.serviceLabel,
+        assignedWindowId: assignedWindow.windowId,
+        assignedWindowNumber: assignedWindow.windowNumber,
+      });
       setRemainingSeconds(currentCenter.kioskTimeoutSeconds);
       setPendingService(null);
+    } catch {
+      setCreationError("No pudimos generar su número. Revise la conexión e intente nuevamente.");
     } finally {
       creatingTicketRef.current = false;
+      setIsCreatingTicket(false);
     }
   };
 
@@ -1245,6 +1259,7 @@ const KioskView = ({
                     No hay una ventanilla disponible para este tipo de atención. Solicite ayuda al personal del centro.
                   </Alert>
                 )}
+                {creationError && <Alert severity="error">{creationError}</Alert>}
               </Stack>
             )}
           </DialogContent>
@@ -1254,10 +1269,10 @@ const KioskView = ({
             </Button>
             <Button
               variant="contained"
-              disabled={!centerIsOpen || !pendingWindow || !pendingService}
+              disabled={!centerIsOpen || !pendingWindow || !pendingService || isCreatingTicket}
               onClick={() => pendingService && createTicket(pendingService)}
             >
-              Confirmar y obtener número
+              {isCreatingTicket ? "Generando número..." : "Confirmar y obtener número"}
             </Button>
           </DialogActions>
         </Dialog>
@@ -3464,42 +3479,65 @@ const DeleteCenterDialog = ({
   );
 };
 
-const PublicStatusView = ({ data, token }: { data: AppData; token: string }) => {
-  const caseItem = Object.values(data.cases).find((item) => item.publicToken === token);
-  const center = caseItem ? data.centers[caseItem.centerId] : undefined;
-  const cashierNumber = caseItem?.cashierId?.match(/(\d+)$/)?.[1];
-  const cashierName = caseItem?.cashierId
-    ? center?.cashiers.find((cashier) => cashier.cashierId === caseItem.cashierId)?.name ??
-      (cashierNumber ? `Caja ${cashierNumber}` : "Caja asignada")
-    : null;
-  const presentation = caseItem
-    ? getPublicJourneyPresentation(caseItem, cashierName)
-    : null;
-  const hasVisiblePublicCode = caseItem
-    ? isVisiblePublicCode(caseItem.publicCode)
+const publicStatusDetails = (status: string) => {
+  if (status === "Guarde su número") return { step: 0, description: "Tome una fotografía de esta pantalla o conserve esta página para consultar su atención." };
+  if (status === "Prepare su documentación") return { step: 1, description: "Mantenga sus documentos disponibles mientras espera el llamado." };
+  if (status.startsWith("Diríjase a Ventanilla")) return { step: 2, description: "Su número fue llamado. Preséntese en la ventanilla indicada." };
+  if (status === "Atención en ventanilla") return { step: 2, description: "El personal está revisando su documentación." };
+  if (status === "Espere el llamado a caja") return { step: 3, description: "Vuelva al área de espera y mantenga preparado su medio de pago." };
+  if (status === "Diríjase a caja" || status.startsWith("Diríjase a Caja")) return { step: 4, description: "Su número fue llamado para continuar con el pago." };
+  if (status === "Atención en caja") return { step: 4, description: "Complete el pago siguiendo las indicaciones del personal." };
+  if (status === "Trámite finalizado") return { step: 5, description: "El pago fue registrado y su atención ha finalizado." };
+  return { step: null, description: status };
+};
+
+const PublicStatusView = ({ token }: { token: string }) => {
+  const [loadState, setLoadState] = useState<"loading" | "found" | "not-found" | "error">("loading");
+  const [turnStatus, setTurnStatus] = useState<PublicTurnStatus | null>(null);
+
+  useEffect(() => {
+    setLoadState("loading");
+    setTurnStatus(null);
+    try {
+      return subscribeToPublicTurnStatus(
+        token,
+        (status) => {
+          setTurnStatus(status);
+          setLoadState(status ? "found" : "not-found");
+        },
+        () => setLoadState("error"),
+      );
+    } catch {
+      setLoadState("error");
+      return undefined;
+    }
+  }, [token]);
+
+  const hasVisiblePublicCode = turnStatus
+    ? isVisiblePublicCode(turnStatus.publicCode)
     : false;
-  const showRequirements = caseItem
-    ? [
-        "arrived",
-        "waiting_document_validation",
-        "called_to_window",
-        "in_document_validation",
-      ].includes(caseItem.currentState)
-    : false;
-  const showPaymentMethods = caseItem
-    ? [
-        "approved_for_cashier",
-        "waiting_cashier",
-        "called_to_cashier",
-        "in_cashier_attention",
-      ].includes(caseItem.currentState)
-    : false;
+  const requirements = turnStatus?.requirements.map((label, index) => ({
+    requirementId: `public-requirement-${index}`,
+    label,
+    enabled: true,
+  })) ?? [];
+  const paymentMethods = turnStatus?.paymentMethods.map((method, index) => ({
+    paymentMethodId: `public-payment-${index}`,
+    ...method,
+  })) ?? [];
+  const statusDetails = turnStatus ? publicStatusDetails(turnStatus.status) : null;
 
   return (
     <CenteredShell>
       <Card sx={{ width: "min(760px, 100%)" }}>
         <CardContent sx={{ p: { xs: 2.5, sm: 4 }, "&:last-child": { pb: { xs: 2.5, sm: 4 } } }}>
-          {!caseItem || !presentation || !hasVisiblePublicCode ? (
+          {loadState === "loading" ? (
+            <Box role="status" aria-live="polite">
+              <Typography>Cargando el estado de su atención...</Typography>
+            </Box>
+          ) : loadState === "error" ? (
+            <Alert severity="error">No pudimos consultar este turno. Revise su conexión e intente nuevamente.</Alert>
+          ) : loadState === "not-found" || !turnStatus || !hasVisiblePublicCode ? (
             <Alert severity="warning">No encontramos este turno. Revise el QR o consulte en ventanilla.</Alert>
           ) : (
             <Stack spacing={3}>
@@ -3511,18 +3549,21 @@ const PublicStatusView = ({ data, token }: { data: AppData; token: string }) => 
                 <Typography
                   variant="h2"
                   color="primary"
-                  aria-label={getAccessiblePublicCode(caseItem.publicCode)}
+                  aria-label={getAccessiblePublicCode(turnStatus.publicCode)}
                   sx={{ fontVariantNumeric: "tabular-nums" }}
                 >
-                  {caseItem.publicCode}
+                  {turnStatus.publicCode}
                 </Typography>
-                <Typography color="text.secondary">{caseItem.serviceLabel}</Typography>
-                <Typography variant="h5">{presentation.title}</Typography>
-                {presentation.destination && (
+                <Typography color="text.secondary">{turnStatus.serviceLabel}</Typography>
+                <Typography variant="h5">{turnStatus.status}</Typography>
+                {turnStatus.destination && (
                   <Typography color="text.secondary" fontWeight={700}>
-                    {presentation.destination}
+                    {turnStatus.destination}
                   </Typography>
                 )}
+                <Typography variant="body2" color="text.secondary">
+                  Última actualización: {formatTime(turnStatus.updatedAt)}
+                </Typography>
               </Stack>
 
               <Paper
@@ -3534,19 +3575,21 @@ const PublicStatusView = ({ data, token }: { data: AppData; token: string }) => 
                 <Typography id="current-public-instruction" variant="h6" mb={1}>
                   Qué debe hacer ahora
                 </Typography>
-                <Typography color="text.secondary">{presentation.description}</Typography>
+                <Typography color="text.secondary">
+                  {statusDetails?.description}
+                </Typography>
               </Paper>
 
               <Divider />
-              {!presentation.isExceptional && (
-                <PublicJourneyStepper activeStep={getPublicJourneyStep(caseItem.currentState)} />
+              {statusDetails?.step !== null && statusDetails?.step !== undefined && (
+                <PublicJourneyStepper activeStep={statusDetails.step} />
               )}
 
               <PublicJourneyInformation
-                requirements={center?.documentaryRequirements[caseItem.serviceType] ?? []}
-                paymentMethods={center?.paymentMethods ?? []}
-                showRequirements={showRequirements}
-                showPaymentMethods={showPaymentMethods}
+                requirements={requirements}
+                paymentMethods={paymentMethods}
+                showRequirements={requirements.length > 0}
+                showPaymentMethods={paymentMethods.length > 0}
               />
 
               <Alert severity="info">
@@ -3725,7 +3768,7 @@ const App = () => {
   }, [authenticatedProfile, hasAuthorizedCenter, selectedCenterId, selectedDayId]);
 
   if (publicToken) {
-    return <PublicStatusView data={data} token={publicToken} />;
+    return <PublicStatusView token={publicToken} />;
   }
 
   if (privateAccessRequested && authSession.status !== "authenticated") {
@@ -3788,7 +3831,7 @@ const App = () => {
   return (
     <>
       <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? () => void signOutCurrentUser() : undefined} />
-      {effectiveRole === "kiosk" && <KioskView data={data} setData={setData} />}
+      {effectiveRole === "kiosk" && <KioskView data={data} />}
       {effectiveRole.startsWith("operator") && activeOperatorWindow && (
         <OperatorView operatorWindow={activeOperatorWindow} role={effectiveRole} data={privateData} setData={setData} />
       )}

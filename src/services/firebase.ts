@@ -20,6 +20,11 @@ import {
   type Database,
   type Unsubscribe,
 } from "firebase/database";
+import {
+  getFunctions,
+  httpsCallable,
+  type Functions,
+} from "firebase/functions";
 import { getPublicJourneyPresentation } from "../publicJourney";
 import type {
   CaseRecord,
@@ -50,11 +55,13 @@ export const useFirebaseEmulator =
 export let firebaseApp: FirebaseApp | null = null;
 export let firebaseDatabase: Database | null = null;
 export let firebaseAuth: Auth | null = null;
+export let firebaseFunctions: Functions | null = null;
 
 if (hasFirebaseConfig) {
   firebaseApp = initializeApp(firebaseConfig);
   firebaseDatabase = getDatabase(firebaseApp);
   firebaseAuth = getAuth(firebaseApp);
+  firebaseFunctions = getFunctions(firebaseApp, "us-central1");
 
   if (useFirebaseEmulator) {
     connectDatabaseEmulator(firebaseDatabase, "127.0.0.1", 9000);
@@ -63,6 +70,33 @@ if (hasFirebaseConfig) {
 
 export const database = firebaseDatabase;
 export const auth = firebaseAuth;
+export const functions = firebaseFunctions;
+
+interface CreateKioskArrivalResponse {
+  publicCode: string;
+  publicToken: string;
+}
+
+export const createKioskArrivalCallable = async (
+  centerId: string,
+  serviceType: string,
+): Promise<CreateKioskArrivalResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+
+  const callable = httpsCallable<
+    { centerId: string; serviceType: string },
+    CreateKioskArrivalResponse
+  >(functions, "createKioskArrival");
+  const result = await callable({ centerId, serviceType });
+  if (
+    !result.data ||
+    typeof result.data.publicCode !== "string" ||
+    typeof result.data.publicToken !== "string"
+  ) {
+    throw new Error("INVALID_KIOSK_ARRIVAL_RESPONSE");
+  }
+  return result.data;
+};
 
 const configuredUsernameDomain =
   import.meta.env.VITE_FIREBASE_USERNAME_DOMAIN?.trim().toLowerCase();
@@ -197,6 +231,66 @@ export const subscribeToOperationalDay = (
       events: value.events,
     });
   });
+};
+
+export const subscribeToPublicTurnStatus = (
+  publicToken: string,
+  onSnapshot: (status: PublicTurnStatus | null) => void,
+  onError: () => void,
+): Unsubscribe => {
+  if (!database) throw new Error("FIREBASE_DATABASE_UNAVAILABLE");
+  if (!publicToken || publicToken.length > 256) {
+    onSnapshot(null);
+    return () => undefined;
+  }
+
+  return onValue(
+    ref(database, `public/turns/${publicPathSegment(publicToken)}`),
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        onSnapshot(null);
+        return;
+      }
+
+      const value = snapshot.val() as Partial<PublicTurnStatus> | null;
+      if (
+        !value ||
+        typeof value.publicCode !== "string" ||
+        typeof value.status !== "string" ||
+        !["representation", "vehicle_owner"].includes(value.serviceType ?? "") ||
+        typeof value.serviceLabel !== "string" ||
+        (value.destination !== null && typeof value.destination !== "string") ||
+        typeof value.updatedAt !== "number" ||
+        !Array.isArray(value.requirements) ||
+        !value.requirements.every((item) => typeof item === "string") ||
+        !Array.isArray(value.paymentMethods) ||
+        !value.paymentMethods.every(
+          (item) =>
+            item &&
+            typeof item.label === "string" &&
+            typeof item.accepted === "boolean",
+        )
+      ) {
+        onError();
+        return;
+      }
+
+      onSnapshot({
+        publicCode: value.publicCode,
+        status: value.status,
+        serviceType: value.serviceType as PublicTurnStatus["serviceType"],
+        serviceLabel: value.serviceLabel,
+        destination: value.destination,
+        updatedAt: value.updatedAt,
+        requirements: [...value.requirements],
+        paymentMethods: value.paymentMethods.map((item) => ({
+          label: item.label,
+          accepted: item.accepted,
+        })),
+      });
+    },
+    onError,
+  );
 };
 
 const publicPathSegment = (value: string) => {
