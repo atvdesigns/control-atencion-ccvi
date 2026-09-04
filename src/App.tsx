@@ -76,7 +76,7 @@ import {
   getPublicJourneyStep,
   isVisiblePublicCode,
 } from "./publicJourney";
-import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, PublicTurnStatus, Role, ServiceType, SessionMetadata } from "./types";
+import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, PublicDisplayEntry, PublicTurnStatus, Role, ServiceType, SessionMetadata } from "./types";
 import { ccviBackgroundGradient, ccviPalette } from "./theme";
 import {
   calculateMetrics,
@@ -124,6 +124,7 @@ import {
   signInWithUsername,
   signOutCurrentUser,
   subscribeToOperationalDay,
+  subscribeToPublicDisplay,
   subscribeToPublicTurnStatus,
   writeCenterConfigRealtime,
   type AuthSessionState,
@@ -756,9 +757,9 @@ const displayCashierTones = [
   { background: "#164E63", border: "#99D5E8", shadow: "rgba(22, 78, 99, 0.24)" },
 ];
 
-const displayToneFor = (caseItem: CaseRecord, mode: "window" | "cashier", center: CenterConfig) => {
+const displayToneFor = (entry: PublicDisplayEntry, mode: "window" | "cashier") => {
   if (mode === "cashier") {
-    const cashierIndex = Math.max(numericSuffix(caseItem.cashierId), 1) - 1;
+    const cashierIndex = Math.max(numericSuffix(entry.destination), 1) - 1;
     const tone = displayCashierTones[cashierIndex % displayCashierTones.length];
 
     return {
@@ -768,11 +769,7 @@ const displayToneFor = (caseItem: CaseRecord, mode: "window" | "cashier", center
     };
   }
 
-  const configuredIndex = center.windows.findIndex(
-    (windowItem) => windowItem.windowId === caseItem.assignedWindowId,
-  );
-  const fallbackIndex = Math.max(publicCodeWindowNumber(caseItem.publicCode), 1) - 1;
-  const toneIndex = configuredIndex >= 0 ? configuredIndex : fallbackIndex;
+  const toneIndex = Math.max(publicCodeWindowNumber(entry.publicCode), 1) - 1;
   const tone = displayWindowTones[toneIndex % displayWindowTones.length];
 
   return {
@@ -2255,26 +2252,36 @@ const PaymentIssueDialog = ({
 };
 
 const DisplayView = ({ data }: { data: AppData }) => {
-  const center = getCurrentCenter(data);
   const lastCallSignatureRef = useRef("");
-  const windowCalls = Object.values(data.cases)
-    .filter(
-      (caseItem) =>
-        caseItem.centerId === data.selectedCenterId &&
-        ["called_to_window", "in_document_validation"].includes(caseItem.currentState),
-    )
+  const dayId = getCurrentSession(data)?.date;
+  const [entries, setEntries] = useState<PublicDisplayEntry[]>([]);
+
+  useEffect(() => {
+    setEntries([]);
+    if (!dayId) return undefined;
+    try {
+      return subscribeToPublicDisplay(
+        data.selectedCenterId,
+        dayId,
+        setEntries,
+        () => setEntries([]),
+      );
+    } catch {
+      setEntries([]);
+      return undefined;
+    }
+  }, [data.selectedCenterId, dayId]);
+
+  const windowCalls = entries
+    .filter((entry) => /^Ventanilla\b/i.test(entry.destination))
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 4);
-  const cashierCalls = Object.values(data.cases)
-    .filter(
-      (caseItem) =>
-        caseItem.centerId === data.selectedCenterId &&
-        ["called_to_cashier", "in_cashier_attention"].includes(caseItem.currentState),
-    )
+  const cashierCalls = entries
+    .filter((entry) => /^Caja\b/i.test(entry.destination))
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 6);
   const callSignature = [...windowCalls, ...cashierCalls]
-    .map((caseItem) => `${caseItem.caseId}:${caseItem.currentState}:${caseItem.updatedAt}`)
+    .map((entry) => `${entry.publicCode}:${entry.destination}:${entry.updatedAt}`)
     .join("|");
 
   useEffect(() => {
@@ -2310,10 +2317,10 @@ const DisplayView = ({ data }: { data: AppData }) => {
         </Box>
         <Grid container spacing={3} alignItems="stretch">
           <Grid item xs={12} md={6}>
-            <DisplayPanel title="Ventanilla" cases={windowCalls} center={center} mode="window" />
+            <DisplayPanel title="Ventanilla" entries={windowCalls} mode="window" />
           </Grid>
           <Grid item xs={12} md={6}>
-            <DisplayPanel title="Caja" cases={cashierCalls} center={center} mode="cashier" />
+            <DisplayPanel title="Caja" entries={cashierCalls} mode="cashier" />
           </Grid>
         </Grid>
       </Stack>
@@ -2323,13 +2330,11 @@ const DisplayView = ({ data }: { data: AppData }) => {
 
 const DisplayPanel = ({
   title,
-  cases,
-  center,
+  entries,
   mode,
 }: {
   title: string;
-  cases: CaseRecord[];
-  center: CenterConfig;
+  entries: PublicDisplayEntry[];
   mode: "window" | "cashier";
 }) => (
   <Card
@@ -2347,16 +2352,12 @@ const DisplayPanel = ({
         {title}
       </Typography>
       <Stack spacing={2} sx={{ height: "calc(100% - 56px)" }}>
-        {cases.length === 0 && <Typography color="text.secondary">Sin llamados activos.</Typography>}
-        {cases.map((caseItem) => {
-          const destination =
-            mode === "window"
-              ? center.windows.find((item) => item.windowId === caseItem.assignedWindowId)?.name
-              : caseItem.cashierId?.replace("cashier", "Caja ");
-          const tone = displayToneFor(caseItem, mode, center);
+        {entries.length === 0 && <Typography color="text.secondary">Sin llamados activos.</Typography>}
+        {entries.map((entry) => {
+          const tone = displayToneFor(entry, mode);
           return (
             <Box
-              key={caseItem.caseId}
+              key={`${entry.publicCode}-${entry.destination}`}
               sx={{
                 p: { xs: 2.25, md: 3 },
                 borderRadius: surfaceRadius,
@@ -2374,12 +2375,12 @@ const DisplayPanel = ({
                   <Typography
                     variant="h2"
                     aria-label={getAccessiblePublicTicketLabel(
-                      caseItem.publicCode,
-                      caseItem.isPriority,
+                      entry.publicCode,
+                      entry.isPriority,
                     )}
                     sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1 }}
                   >
-                    {formatPublicTicketLabel(caseItem.publicCode, caseItem.isPriority)}
+                    {formatPublicTicketLabel(entry.publicCode, entry.isPriority)}
                   </Typography>
                 </Grid>
                 <Grid
@@ -2401,7 +2402,7 @@ const DisplayPanel = ({
                     Pase a
                   </Typography>
                   <Typography variant="h3" sx={{ lineHeight: 1.05 }}>
-                    {destination}
+                    {entry.destination}
                   </Typography>
                 </Grid>
               </Grid>
@@ -3646,7 +3647,7 @@ const Page = ({
 
 const App = () => {
   const [data, setDataState] = useState<AppData>(() => loadData());
-  const [, setRemoteOperationalDay] =
+  const [remoteOperationalDay, setRemoteOperationalDay] =
     useState<OperationalDaySnapshot | null>(null);
   const [role, setRoleState] = useState<Role>(() => getRoleFromUrl());
   const [snackbar, setSnackbar] = useState<string | null>(null);
@@ -3813,16 +3814,51 @@ const App = () => {
   }
 
   const effectiveRole: Role = authenticatedProfile?.role ?? role;
+  const operationalData = useMemo<AppData>(() => {
+    if (!remoteOperationalDay) return data;
+
+    const currentSession = getCurrentSession(data);
+    const remoteMetadata = remoteOperationalDay.metadata &&
+      typeof remoteOperationalDay.metadata === "object"
+      ? remoteOperationalDay.metadata as Partial<SessionMetadata>
+      : null;
+    const remoteCases = remoteOperationalDay.cases &&
+      typeof remoteOperationalDay.cases === "object"
+      ? remoteOperationalDay.cases as AppData["cases"]
+      : {};
+    const remotePaymentQueue = remoteOperationalDay.paymentQueue &&
+      typeof remoteOperationalDay.paymentQueue === "object"
+      ? remoteOperationalDay.paymentQueue as AppData["paymentQueue"]
+      : {};
+    const remoteEvents = Array.isArray(remoteOperationalDay.events)
+      ? remoteOperationalDay.events as AppData["events"]
+      : remoteOperationalDay.events && typeof remoteOperationalDay.events === "object"
+        ? Object.values(remoteOperationalDay.events as Record<string, AppData["events"][number]>)
+        : [];
+
+    return {
+      ...data,
+      sessions: currentSession && remoteMetadata
+        ? {
+            ...data.sessions,
+            [currentSession.sessionId]: { ...currentSession, ...remoteMetadata },
+          }
+        : data.sessions,
+      cases: remoteCases,
+      paymentQueue: remotePaymentQueue,
+      events: remoteEvents,
+    };
+  }, [data, remoteOperationalDay]);
   const privateData = authenticatedProfile
     ? {
-        ...data,
+        ...operationalData,
         centers: Object.fromEntries(
-          Object.entries(data.centers).filter(([centerId]) =>
+          Object.entries(operationalData.centers).filter(([centerId]) =>
             authenticatedProfile.centerIds.includes(centerId),
           ),
         ),
       }
-    : data;
+    : operationalData;
 
   const activeOperatorWindow = effectiveRole.startsWith("operator")
     ? windowForRole(getCurrentCenter(privateData), effectiveRole)

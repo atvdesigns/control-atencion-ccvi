@@ -293,6 +293,53 @@ export const subscribeToPublicTurnStatus = (
   );
 };
 
+export const subscribeToPublicDisplay = (
+  centerId: string,
+  dayId: string,
+  onSnapshot: (entries: PublicDisplayEntry[]) => void,
+  onError: () => void,
+): Unsubscribe => {
+  if (!database) throw new Error("FIREBASE_DATABASE_UNAVAILABLE");
+
+  return onValue(
+    ref(
+      database,
+      `public/displays/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}`,
+    ),
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        onSnapshot([]);
+        return;
+      }
+
+      const entries = Object.values(snapshot.val() as Record<string, unknown>)
+        .filter((value): value is Record<string, unknown> =>
+          Boolean(value && typeof value === "object" && !Array.isArray(value)),
+        )
+        .flatMap((value) => {
+          if (
+            typeof value.publicCode !== "string" ||
+            typeof value.isPriority !== "boolean" ||
+            typeof value.status !== "string" ||
+            typeof value.destination !== "string" ||
+            typeof value.updatedAt !== "number"
+          ) {
+            return [];
+          }
+          return [{
+            publicCode: value.publicCode,
+            isPriority: value.isPriority,
+            status: value.status,
+            destination: value.destination,
+            updatedAt: value.updatedAt,
+          }];
+        });
+      onSnapshot(entries);
+    },
+    onError,
+  );
+};
+
 const publicPathSegment = (value: string) => {
   if (!value || /[.#$[\]/]/.test(value)) {
     throw new Error("INVALID_PUBLIC_PATH_SEGMENT");

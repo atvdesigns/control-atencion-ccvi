@@ -2689,17 +2689,21 @@ export const completePaymentRealtime = async (
       );
       const cashierNameAtCompletion = cashier?.cashierName?.trim() || undefined;
       const commissionRateApplied = center?.cashierCommissionRate;
-      const cashierDurationMs = relatedCase.cashierStartedAt === null
-        ? undefined
-        : Math.max(0, now - relatedCase.cashierStartedAt);
+      const cashierDurationMs = typeof relatedCase.cashierStartedAt === "number"
+        ? Math.max(0, now - relatedCase.cashierStartedAt)
+        : undefined;
       const updatedCase: CaseRecord = {
         ...relatedCase,
         currentState: "completed",
         paymentCompletedAt: now,
-        cashierNameAtCompletion,
-        cashierDurationMs,
-        commissionRateApplied,
-        commissionAmount: commissionRateApplied,
+        ...(cashierNameAtCompletion === undefined ? {} : { cashierNameAtCompletion }),
+        ...(cashierDurationMs === undefined ? {} : { cashierDurationMs }),
+        ...(commissionRateApplied === undefined
+          ? {}
+          : {
+              commissionRateApplied,
+              commissionAmount: commissionRateApplied,
+            }),
         completedAt: now,
         updatedAt: now,
       };

@@ -12,11 +12,27 @@
       ".read": "auth != null && root.child('users').child(auth.uid).child('enabled').val() === true && root.child('users').child(auth.uid).child('role').val() === 'admin'",
       ".write": "auth != null && root.child('users').child(auth.uid).child('enabled').val() === true && root.child('users').child(auth.uid).child('role').val() === 'admin'"
     },
+    "days": {
+      "$centerId": {
+        "$dayId": {
+          ".read": "auth != null && root.child('users').child(auth.uid).exists() && root.child('users').child(auth.uid).child('enabled').val() === true && (root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'operator-window-1' || root.child('users').child(auth.uid).child('role').val() === 'operator-window-2' || root.child('users').child(auth.uid).child('role').val() === 'cashier')",
+          ".write": "auth != null && root.child('users').child(auth.uid).exists() && root.child('users').child(auth.uid).child('enabled').val() === true && (root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'operator-window-1' || root.child('users').child(auth.uid).child('role').val() === 'operator-window-2' || root.child('users').child(auth.uid).child('role').val() === 'cashier')"
+        }
+      }
+    },
     "public": {
       "turns": {
         "$publicToken": {
           ".read": true,
-          ".write": false
+          ".write": "auth != null && root.child('users').child(auth.uid).exists() && root.child('users').child(auth.uid).child('enabled').val() === true && (root.child('users').child(auth.uid).child('role').val() === 'operator-window-1' || root.child('users').child(auth.uid).child('role').val() === 'operator-window-2' || root.child('users').child(auth.uid).child('role').val() === 'cashier' || root.child('users').child(auth.uid).child('role').val() === 'admin')"
+        }
+      },
+      "displays": {
+        "$centerId": {
+          "$dayId": {
+            ".read": true,
+            ".write": "auth != null && root.child('users').child(auth.uid).exists() && root.child('users').child(auth.uid).child('enabled').val() === true && (root.child('users').child(auth.uid).child('role').val() === 'operator-window-1' || root.child('users').child(auth.uid).child('role').val() === 'operator-window-2' || root.child('users').child(auth.uid).child('role').val() === 'cashier' || root.child('users').child(auth.uid).child('role').val() === 'admin')"
+          }
         }
       }
     }
