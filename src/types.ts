@@ -63,6 +63,7 @@ export interface UserProfile {
   uid: string;
   role: PrivateUserRole;
   centerIds: string[];
+  centerAccess: Record<string, true>;
   cashierId?: string;
   enabled: boolean;
 }

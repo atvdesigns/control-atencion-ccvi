@@ -147,6 +147,11 @@ export const getUserProfileRealtime = async (
     !privateUserRoles.includes(value.role as PrivateUserRole) ||
     !Array.isArray(value.centerIds) ||
     !value.centerIds.every((centerId) => typeof centerId === "string") ||
+    !value.centerAccess ||
+    typeof value.centerAccess !== "object" ||
+    Array.isArray(value.centerAccess) ||
+    !Object.values(value.centerAccess).every((allowed) => allowed === true) ||
+    !value.centerIds.every((centerId) => value.centerAccess?.[centerId] === true) ||
     typeof value.enabled !== "boolean" ||
     (value.cashierId !== undefined && typeof value.cashierId !== "string")
   ) {
