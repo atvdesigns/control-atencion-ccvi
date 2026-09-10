@@ -126,9 +126,9 @@ export const getPublicJourneyPresentation = (
     case "payment_completed":
     case "completed":
       return {
-        title: "Trámite finalizado",
-        description: "El pago fue registrado y su atención ha finalizado.",
-        destination: cashierDestination,
+        title: "Proceso finalizado con éxito",
+        description: "Su atención en CCVI ha finalizado. Puede proceder al retiro de su vehículo.",
+        destination: null,
         isExceptional: false,
       };
     case "no_show":

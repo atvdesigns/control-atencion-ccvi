@@ -303,6 +303,7 @@ export const subscribeToPublicTurnStatus = (
       onSnapshot({
         centerId: value.centerId,
         publicCode: value.publicCode,
+        isPriority: value.isPriority === true,
         status: value.status,
         serviceType: value.serviceType as PublicTurnStatus["serviceType"],
         serviceLabel: value.serviceLabel,
@@ -505,6 +506,7 @@ export const toPublicTurnStatus = (
   return {
     centerId: caseItem.centerId,
     publicCode: caseItem.publicCode,
+    isPriority: caseItem.isPriority,
     status: presentation.title,
     serviceType: caseItem.serviceType,
     serviceLabel: caseItem.serviceLabel,

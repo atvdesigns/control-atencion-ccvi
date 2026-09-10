@@ -76,6 +76,7 @@ export interface PublicPaymentMethod {
 export interface PublicTurnStatus {
   centerId: string;
   publicCode: string;
+  isPriority: boolean;
   status: string;
   serviceType: ServiceType;
   serviceLabel: string;

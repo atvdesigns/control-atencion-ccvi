@@ -291,6 +291,7 @@ export const createKioskArrival = onCall(
       await database.ref(`public/turns/${publicToken}`).set({
         centerId,
         publicCode: committedCase.publicCode,
+        isPriority: false,
         status: "Prepare su documentación",
         serviceType,
         serviceLabel: assignedWindow.serviceLabel,

@@ -1738,7 +1738,8 @@ const OperatorView = ({
         fullWidth
         maxWidth="sm"
       >
-        <DialogTitle>
+        <DialogTitle sx={{ px: { xs: 2.5, sm: 3 }, pt: { xs: 2.5, sm: 3 }, pb: 1.5 }}>
+          <Typography variant="h5" component="span" fontWeight={700}>
           {createdPriorityCase
             ? "Turno preferencial creado"
             : priorityCreationOpen
@@ -1746,21 +1747,24 @@ const OperatorView = ({
             : priorityDialogCase?.isPriority
               ? "Atención preferencial"
               : "Crear atención preferencial"}
+          </Typography>
         </DialogTitle>
         <DialogContent>
           {createdPriorityCase ? (
-            <Stack spacing={2.5} alignItems="center" sx={{ pt: 1 }}>
+            <Stack spacing={3} alignItems="center" sx={{ pt: 1, mx: "auto", maxWidth: 480 }}>
               <Typography variant="h3" component="p" color="primary" fontWeight={800}>
                 {createdPriorityCase.publicCode} P
               </Typography>
-              <Typography textAlign="center">
+              <Typography textAlign="center" sx={{ maxWidth: 440, lineHeight: 1.6 }}>
                 Muestre este código QR a la persona para que pueda seguir el estado de su atención.
               </Typography>
-              <QRCodeSVG
-                value={getPublicStatusUrl(createdPriorityCase.publicToken)}
-                size={200}
-                title={`Código QR del turno preferencial ${createdPriorityCase.publicCode}`}
-              />
+              <Box sx={{ p: 2, display: "grid", placeItems: "center" }}>
+                <QRCodeSVG
+                  value={getPublicStatusUrl(createdPriorityCase.publicToken)}
+                  size={200}
+                  title={`Código QR del turno preferencial ${createdPriorityCase.publicCode}`}
+                />
+              </Box>
               <Typography variant="h5" component="p" fontWeight={700}>
                 {createdPriorityCase.publicCode} P
               </Typography>
@@ -1809,7 +1813,7 @@ const OperatorView = ({
             </>
           )}
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: { xs: 2.5, sm: 3 }, pt: 2, pb: { xs: 2.5, sm: 3 } }}>
           {createdPriorityCase ? (
             <Button variant="contained" onClick={closePriorityDialog}>Finalizar</Button>
           ) : (
@@ -3574,7 +3578,9 @@ const publicStatusDetails = (status: string) => {
   if (status === "Espere el llamado a caja") return { step: 3, description: "Vuelva al área de espera y mantenga preparado su medio de pago." };
   if (status === "Diríjase a caja" || status.startsWith("Diríjase a Caja")) return { step: 4, description: "Su número fue llamado para continuar con el pago." };
   if (status === "Atención en caja") return { step: 4, description: "Complete el pago siguiendo las indicaciones del personal." };
-  if (status === "Trámite finalizado") return { step: 5, description: "El pago fue registrado y su atención ha finalizado." };
+  if (status === "Trámite finalizado" || status === "Proceso finalizado con éxito") {
+    return { step: 5, description: "Su atención en CCVI ha finalizado. Puede proceder al retiro de su vehículo." };
+  }
   return { step: null, description: status };
 };
 
@@ -3613,6 +3619,12 @@ const PublicStatusView = ({ token }: { token: string }) => {
     ...method,
   })) ?? [];
   const statusDetails = turnStatus ? publicStatusDetails(turnStatus.status) : null;
+  const isCompletedStatus = turnStatus
+    ? ["Trámite finalizado", "Proceso finalizado con éxito"].includes(turnStatus.status)
+    : false;
+  const displayedPublicCode = turnStatus
+    ? `${turnStatus.publicCode}${turnStatus.isPriority ? " P" : ""}`
+    : "";
 
   return (
     <CenteredShell>
@@ -3636,14 +3648,18 @@ const PublicStatusView = ({ token }: { token: string }) => {
                 <Typography
                   variant="h2"
                   color="primary"
-                  aria-label={getAccessiblePublicCode(turnStatus.publicCode)}
+                  aria-label={turnStatus.isPriority
+                    ? `${getAccessiblePublicCode(turnStatus.publicCode)}, atención preferencial`
+                    : getAccessiblePublicCode(turnStatus.publicCode)}
                   sx={{ fontVariantNumeric: "tabular-nums" }}
                 >
-                  {turnStatus.publicCode}
+                  {displayedPublicCode}
                 </Typography>
                 <Typography color="text.secondary">{turnStatus.serviceLabel}</Typography>
-                <Typography variant="h5">{turnStatus.status}</Typography>
-                {turnStatus.destination && (
+                <Typography variant="h5" color={isCompletedStatus ? "success.main" : "text.primary"}>
+                  {isCompletedStatus ? "Proceso finalizado con éxito" : turnStatus.status}
+                </Typography>
+                {!isCompletedStatus && turnStatus.destination && (
                   <Typography color="text.secondary" fontWeight={700}>
                     {turnStatus.destination}
                   </Typography>
@@ -3657,7 +3673,11 @@ const PublicStatusView = ({ token }: { token: string }) => {
                 component="section"
                 variant="outlined"
                 aria-labelledby="current-public-instruction"
-                sx={{ p: { xs: 2, sm: 2.5 }, bgcolor: "#f7f9fc" }}
+                sx={{
+                  p: { xs: 2, sm: 2.5 },
+                  bgcolor: isCompletedStatus ? "action.hover" : "#f7f9fc",
+                  borderColor: isCompletedStatus ? "success.main" : undefined,
+                }}
               >
                 <Typography id="current-public-instruction" variant="h6" mb={1}>
                   Qué debe hacer ahora
@@ -3665,19 +3685,28 @@ const PublicStatusView = ({ token }: { token: string }) => {
                 <Typography color="text.secondary">
                   {statusDetails?.description}
                 </Typography>
+                {isCompletedStatus && (
+                  <Typography color="text.secondary" sx={{ mt: 1 }}>
+                    Presente la documentación correspondiente al momento del retiro.
+                  </Typography>
+                )}
               </Paper>
 
-              <Divider />
-              {statusDetails?.step !== null && statusDetails?.step !== undefined && (
-                <PublicJourneyStepper activeStep={statusDetails.step} />
-              )}
+              {!isCompletedStatus && (
+                <>
+                  <Divider />
+                  {statusDetails?.step !== null && statusDetails?.step !== undefined && (
+                    <PublicJourneyStepper activeStep={statusDetails.step} />
+                  )}
 
-              <PublicJourneyInformation
-                requirements={requirements}
-                paymentMethods={paymentMethods}
-                showRequirements={requirements.length > 0}
-                showPaymentMethods={paymentMethods.length > 0}
-              />
+                  <PublicJourneyInformation
+                    requirements={requirements}
+                    paymentMethods={paymentMethods}
+                    showRequirements={requirements.length > 0}
+                    showPaymentMethods={paymentMethods.length > 0}
+                  />
+                </>
+              )}
 
               <Alert severity="info">
                 Esta página no muestra datos personales, carpeta interna ni información documental.
