@@ -1801,13 +1801,17 @@ const OperatorView = ({
               if (!selectedPriorityType) return;
               if (priorityCreationOpen) {
                 closePriorityDialog();
-                const next = await createPriorityArrivalRealtime(
-                  data,
-                  operatorWindow.serviceType,
-                  selectedPriorityType,
-                  role,
-                );
-                setData(() => next);
+                try {
+                  const next = await createPriorityArrivalRealtime(
+                    data,
+                    operatorWindow.serviceType,
+                    selectedPriorityType,
+                    role,
+                  );
+                  setData(() => next);
+                } catch (error) {
+                  console.error("No se pudo crear el turno preferencial.", error);
+                }
                 return;
               }
               if (!priorityDialogCase) return;
