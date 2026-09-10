@@ -3762,6 +3762,78 @@ const Page = ({
   </Container>
 );
 
+const LoginShell = ({ children }: { children: React.ReactNode }) => (
+  <Box
+    sx={{
+      minHeight: "100vh",
+      display: "flex",
+      flexDirection: "column",
+      bgcolor: ccviPalette.navy,
+      backgroundImage:
+        "linear-gradient(rgba(0, 0, 0, 0.52), rgba(0, 0, 0, 0.52)), url('/ccvi-login-background.png')",
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+    }}
+  >
+    <Box
+      component="header"
+      sx={{
+        minHeight: { xs: 80, sm: 96 },
+        px: { xs: 2, sm: 3, md: 6 },
+        py: 1,
+        bgcolor: "#111C33",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 2,
+      }}
+    >
+      <Stack direction="row" alignItems="center" spacing={{ xs: 1.5, sm: 2.5 }} minWidth={0}>
+        <AppLogo size={64} />
+        <Box minWidth={0}>
+          <Typography color="common.white" fontWeight={700} noWrap>
+            CCVI | Panel Administrativo
+          </Typography>
+          <Typography
+            color="#B4C3D7"
+            sx={{ display: { xs: "none", sm: "block" } }}
+          >
+            Centro de control de atención
+          </Typography>
+        </Box>
+      </Stack>
+      <Typography color="#B4C3D7" variant="body2" sx={{ display: { xs: "none", md: "block" } }}>
+        Panel Administrativo
+      </Typography>
+    </Box>
+
+    <Box
+      component="main"
+      sx={{
+        flex: 1,
+        display: "grid",
+        placeItems: "center",
+        width: "100%",
+        px: { xs: 2, sm: 3 },
+        py: { xs: 4, sm: 6 },
+      }}
+    >
+      <Paper
+        elevation={16}
+        sx={{
+          width: "100%",
+          maxWidth: 640,
+          borderRadius: 3,
+          px: { xs: 2.5, sm: 4 },
+          py: { xs: 3, sm: 5 },
+        }}
+      >
+        {children}
+      </Paper>
+    </Box>
+  </Box>
+);
+
 const App = () => {
   const [data, setDataState] = useState<AppData>(() => loadData());
   const [remoteOperationalDay, setRemoteOperationalDay] =
@@ -3776,6 +3848,7 @@ const App = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
   const publicToken = useMemo(() => {
     const match = window.location.pathname.match(/^\/turno\/(.+)$/);
@@ -3905,38 +3978,57 @@ const App = () => {
 
   if (privateAccessRequested && authSession.status !== "authenticated") {
     if (authSession.status === "loading") {
-      return <Page title="Acceso privado"><Typography>Cargando sesión...</Typography></Page>;
+      return <LoginShell><Typography role="status">Cargando sesión...</Typography></LoginShell>;
     }
     if (authSession.status === "unauthorized") {
       return (
-        <Page title="Acceso no autorizado">
+        <LoginShell>
+          <Stack spacing={3}>
+          <Typography variant="h4" component="h1" color="primary" textAlign="center">Acceso no autorizado</Typography>
           <Typography>Su cuenta no tiene un perfil habilitado para acceder.</Typography>
           <Button variant="contained" onClick={() => void signOutCurrentUser()}>Cerrar sesión</Button>
-        </Page>
+          </Stack>
+        </LoginShell>
       );
     }
     return (
-      <Page title="Iniciar sesión">
+      <LoginShell>
         <Box
           component="form"
-          sx={{ maxWidth: 420, display: "grid", gap: 2 }}
+          sx={{ display: "grid", gap: 2.5 }}
           onSubmit={async (event) => {
             event.preventDefault();
             setLoginError(null);
+            setIsSigningIn(true);
             try {
               await signInWithUsername(username, password);
               setPassword("");
             } catch {
-              setLoginError("No pudimos iniciar sesión. Revise sus credenciales e intente nuevamente.");
+              setLoginError("No pudimos iniciar sesión. Verifique su usuario y contraseña.");
+            } finally {
+              setIsSigningIn(false);
             }
           }}
         >
-          <TextField label="Usuario" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
-          <TextField label="Contraseña" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
+          <Stack spacing={0.75} textAlign="center" sx={{ mb: 1 }}>
+            <Typography variant="h4" component="h1" color="primary">Iniciar sesión</Typography>
+            <Typography color="text.secondary">Acceda con sus credenciales para continuar.</Typography>
+          </Stack>
+          <TextField label="Usuario" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required disabled={isSigningIn} />
+          <TextField label="Contraseña" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required disabled={isSigningIn} />
           {loginError && <Alert severity="error">{loginError}</Alert>}
-          <Button type="submit" variant="contained">Iniciar sesión</Button>
+          <Box sx={{ display: "flex", justifyContent: "center", pt: 1 }}>
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={isSigningIn}
+              sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 220 }, px: 4, borderRadius: 1.5, fontSize: 18 }}
+            >
+              {isSigningIn ? "Iniciando sesión..." : "Iniciar sesión"}
+            </Button>
+          </Box>
         </Box>
-      </Page>
+      </LoginShell>
     );
   }
 
