@@ -3705,9 +3705,11 @@ const App = () => {
     () => new URLSearchParams(window.location.search).get("role"),
     [],
   );
-  const privateAccessRequested = Boolean(
-    requestedRole && requestedRole !== "kiosk" && requestedRole !== "display",
+  const loginRouteRequested = window.location.pathname === "/login";
+  const legacyPrivateEntryRequested = Boolean(
+    requestedRole && ["admin", "operator-window-1", "operator-window-2", "cashier"].includes(requestedRole),
   );
+  const privateAccessRequested = loginRouteRequested || legacyPrivateEntryRequested;
 
   useEffect(() => observeAuthSession(setAuthSession), []);
 
@@ -3808,11 +3810,14 @@ const App = () => {
   }, [authenticatedProfile, hasAuthorizedCenter, selectedCenterId, selectedDayId]);
 
   useEffect(() => {
-    if (authSession.status !== "authenticated" || !privateAccessRequested) return;
-    const url = new URL(window.location.href);
-    url.searchParams.delete("role");
-    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [authSession.status, privateAccessRequested]);
+    if (authSession.status === "authenticated" && privateAccessRequested) {
+      window.history.replaceState(null, "", "/");
+      return;
+    }
+    if (authSession.status !== "loading" && legacyPrivateEntryRequested) {
+      window.history.replaceState(null, "", "/login");
+    }
+  }, [authSession.status, legacyPrivateEntryRequested, privateAccessRequested]);
 
   if (publicToken) {
     return <PublicStatusView token={publicToken} />;
@@ -3831,7 +3836,7 @@ const App = () => {
       );
     }
     return (
-      <Page title="Ingresar">
+      <Page title="Iniciar sesión">
         <Box
           component="form"
           sx={{ maxWidth: 420, display: "grid", gap: 2 }}
@@ -3849,7 +3854,7 @@ const App = () => {
           <TextField label="Usuario" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required />
           <TextField label="Contraseña" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
           {loginError && <Alert severity="error">{loginError}</Alert>}
-          <Button type="submit" variant="contained">Ingresar</Button>
+          <Button type="submit" variant="contained">Iniciar sesión</Button>
         </Box>
       </Page>
     );
