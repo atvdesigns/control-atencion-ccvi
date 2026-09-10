@@ -729,8 +729,14 @@ export const createPriorityArrivalRealtime = async (
   serviceType: ServiceType,
   priorityType: PriorityType,
   role: Role,
-): Promise<AppData> => {
-  if (!database) return createPriorityArrival(data, serviceType, priorityType, role);
+): Promise<{ data: AppData; createdCase: CaseRecord | null }> => {
+  if (!database) {
+    const nextData = createPriorityArrival(data, serviceType, priorityType, role);
+    const createdCase = Object.values(nextData.cases).find(
+      (caseItem) => !data.cases[caseItem.caseId],
+    ) ?? null;
+    return { data: nextData, createdCase };
+  }
 
   const base = ensureSession(data);
   const center = getCurrentCenter(base);
@@ -742,7 +748,7 @@ export const createPriorityArrivalRealtime = async (
     !isCenterOpenForTickets(center) ||
     !["operator-window-1", "operator-window-2"].includes(role)
   ) {
-    return base;
+    return { data: base, createdCase: null };
   }
 
   const now = Date.now();
@@ -865,25 +871,30 @@ export const createPriorityArrivalRealtime = async (
     { applyLocally: false },
   );
 
-  if (!result.committed) return base;
+  if (!result.committed) return { data: base, createdCase: null };
   const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
   const committedCase = committedDay?.cases?.[caseId];
   const committedEvents = collectionRecord<TraceEvent>(committedDay?.events);
   const arrivalEvent = committedEvents[arrivalEventId];
   const priorityEvent = committedEvents[priorityEventId];
   const committedMetadata = committedDay?.metadata;
-  if (!committedCase || !arrivalEvent || !priorityEvent || !committedMetadata) return base;
+  if (!committedCase || !arrivalEvent || !priorityEvent || !committedMetadata) {
+    return { data: base, createdCase: null };
+  }
 
   await syncPublicCaseProjection(committedCase, center, session.date);
 
   return {
-    ...base,
-    sessions: {
-      ...base.sessions,
-      [session.sessionId]: { ...session, ...committedMetadata },
+    createdCase: committedCase,
+    data: {
+      ...base,
+      sessions: {
+        ...base.sessions,
+        [session.sessionId]: { ...session, ...committedMetadata },
+      },
+      cases: { ...base.cases, [caseId]: committedCase },
+      events: [priorityEvent, arrivalEvent, ...base.events],
     },
-    cases: { ...base.cases, [caseId]: committedCase },
-    events: [priorityEvent, arrivalEvent, ...base.events],
   };
 };
 

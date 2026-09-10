@@ -1344,6 +1344,8 @@ const OperatorView = ({
 }) => {
   const [priorityDialogCase, setPriorityDialogCase] = useState<CaseRecord | null>(null);
   const [priorityCreationOpen, setPriorityCreationOpen] = useState(false);
+  const [isCreatingPriority, setIsCreatingPriority] = useState(false);
+  const [createdPriorityCase, setCreatedPriorityCase] = useState<CaseRecord | null>(null);
   const [priorityRemovalCase, setPriorityRemovalCase] = useState<CaseRecord | null>(null);
   const [selectedPriorityType, setSelectedPriorityType] = useState<PriorityType | "">("");
   const [rejectionDialogCase, setRejectionDialogCase] = useState<CaseRecord | null>(null);
@@ -1352,6 +1354,8 @@ const OperatorView = ({
   const closePriorityDialog = () => {
     setPriorityDialogCase(null);
     setPriorityCreationOpen(false);
+    setIsCreatingPriority(false);
+    setCreatedPriorityCase(null);
     setSelectedPriorityType("");
   };
   const closeRejectionDialog = () => {
@@ -1441,6 +1445,7 @@ const OperatorView = ({
               variant="contained"
               onClick={() => {
                 setPriorityDialogCase(null);
+                setCreatedPriorityCase(null);
                 setSelectedPriorityType("");
                 setPriorityCreationOpen(true);
               }}
@@ -1729,18 +1734,46 @@ const OperatorView = ({
       </Stack>
       <Dialog
         open={Boolean(priorityDialogCase) || priorityCreationOpen}
-        onClose={closePriorityDialog}
+        onClose={createdPriorityCase ? undefined : closePriorityDialog}
         fullWidth
         maxWidth="sm"
       >
         <DialogTitle>
-          {priorityCreationOpen
-            ? "Crear turno preferencial"
+          {createdPriorityCase
+            ? "Turno preferencial creado"
+            : priorityCreationOpen
+              ? "Crear turno preferencial"
             : priorityDialogCase?.isPriority
               ? "Atención preferencial"
               : "Crear atención preferencial"}
         </DialogTitle>
         <DialogContent>
+          {createdPriorityCase ? (
+            <Stack spacing={2.5} alignItems="center" sx={{ pt: 1 }}>
+              <Typography variant="h3" component="p" color="primary" fontWeight={800}>
+                {createdPriorityCase.publicCode} P
+              </Typography>
+              <Typography textAlign="center">
+                Muestre este código QR a la persona para que pueda seguir el estado de su atención.
+              </Typography>
+              <QRCodeSVG
+                value={getPublicStatusUrl(createdPriorityCase.publicToken)}
+                size={200}
+                title={`Código QR del turno preferencial ${createdPriorityCase.publicCode}`}
+              />
+              <Typography variant="h5" component="p" fontWeight={700}>
+                {createdPriorityCase.publicCode} P
+              </Typography>
+              <Typography color="text.secondary" textAlign="center">
+                Escanee el código con la cámara del teléfono.
+              </Typography>
+            </Stack>
+          ) : priorityCreationOpen ? (
+            <Typography sx={{ pt: 1 }}>
+              Se generará un nuevo turno con atención preferencial.
+            </Typography>
+          ) : (
+            <>
           {priorityDialogCase?.isPriority && priorityDialogCase.priorityType && (
             <Stack spacing={0.75} sx={{ mt: 1, mb: 2 }}>
               <Typography>Este turno está registrado como atención preferencial.</Typography>
@@ -1773,8 +1806,14 @@ const OperatorView = ({
               ))}
             </RadioGroup>
           </FormControl>
+            </>
+          )}
         </DialogContent>
         <DialogActions>
+          {createdPriorityCase ? (
+            <Button variant="contained" onClick={closePriorityDialog}>Finalizar</Button>
+          ) : (
+            <>
           <Button onClick={closePriorityDialog}>Cancelar</Button>
           {priorityDialogCase?.isPriority && (
             <Button
@@ -1791,29 +1830,33 @@ const OperatorView = ({
           <Button
             variant="contained"
             disabled={
-              !selectedPriorityType ||
+              isCreatingPriority ||
               (!priorityCreationOpen &&
+                (!selectedPriorityType ||
                 (!priorityDialogCase ||
                   (priorityDialogCase.isPriority &&
-                    priorityDialogCase.priorityType === selectedPriorityType)))
+                    priorityDialogCase.priorityType === selectedPriorityType))))
             }
             onClick={async () => {
-              if (!selectedPriorityType) return;
               if (priorityCreationOpen) {
-                closePriorityDialog();
+                setIsCreatingPriority(true);
                 try {
-                  const next = await createPriorityArrivalRealtime(
+                  const result = await createPriorityArrivalRealtime(
                     data,
                     operatorWindow.serviceType,
-                    selectedPriorityType,
+                    "other",
                     role,
                   );
-                  setData(() => next);
+                  setData(() => result.data);
+                  if (result.createdCase) setCreatedPriorityCase(result.createdCase);
                 } catch (error) {
                   console.error("No se pudo crear el turno preferencial.", error);
+                } finally {
+                  setIsCreatingPriority(false);
                 }
                 return;
               }
+              if (!selectedPriorityType) return;
               if (!priorityDialogCase) return;
               const priorityCaseId = priorityDialogCase.caseId;
               const priorityWasSet = priorityDialogCase.isPriority;
@@ -1835,11 +1878,13 @@ const OperatorView = ({
             }}
           >
             {priorityCreationOpen
-              ? "Crear turno"
+              ? "Crear turno preferencial"
               : priorityDialogCase?.isPriority
                 ? "Cambiar motivo"
                 : "Crear atención preferencial"}
           </Button>
+            </>
+          )}
         </DialogActions>
       </Dialog>
       <Dialog
