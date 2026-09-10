@@ -32,6 +32,7 @@ import type {
   PrivateUserRole,
   PublicDisplayEntry,
   PublicTurnStatus,
+  ServiceType,
   UserProfile,
 } from "../types";
 
@@ -75,6 +76,22 @@ export const functions = firebaseFunctions;
 interface CreateKioskArrivalResponse {
   publicCode: string;
   publicToken: string;
+}
+
+export interface PublicKioskConfig {
+  centerId: string;
+  enabled: boolean;
+  timezone: string;
+  serviceStartTime: string;
+  serviceEndTime: string;
+  kioskTimeoutSeconds: number;
+  windows: Array<{
+    enabled: boolean;
+    displayOrder: number;
+    windowNumber: number;
+    serviceType: ServiceType;
+    serviceLabel: string;
+  }>;
 }
 
 export const createKioskArrivalCallable = async (
@@ -345,6 +362,48 @@ export const subscribeToPublicDisplay = (
   );
 };
 
+export const subscribeToPublicKioskConfig = (
+  centerId: string,
+  onSnapshot: (config: PublicKioskConfig | null) => void,
+  onError: () => void,
+): Unsubscribe => {
+  if (!database) throw new Error("FIREBASE_DATABASE_UNAVAILABLE");
+
+  return onValue(
+    ref(database, `public/kiosks/${publicPathSegment(centerId)}`),
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        onSnapshot(null);
+        return;
+      }
+      const value = snapshot.val() as Partial<PublicKioskConfig> | null;
+      const windows = Array.isArray(value?.windows) ? value.windows : [];
+      if (
+        !value ||
+        value.centerId !== centerId ||
+        typeof value.enabled !== "boolean" ||
+        typeof value.timezone !== "string" ||
+        typeof value.serviceStartTime !== "string" ||
+        typeof value.serviceEndTime !== "string" ||
+        typeof value.kioskTimeoutSeconds !== "number" ||
+        !windows.every((windowItem) =>
+          windowItem &&
+          typeof windowItem.enabled === "boolean" &&
+          typeof windowItem.displayOrder === "number" &&
+          typeof windowItem.windowNumber === "number" &&
+          typeof windowItem.serviceType === "string" &&
+          typeof windowItem.serviceLabel === "string",
+        )
+      ) {
+        onSnapshot(null);
+        return;
+      }
+      onSnapshot(value as PublicKioskConfig);
+    },
+    onError,
+  );
+};
+
 const publicPathSegment = (value: string) => {
   if (!value || /[.#$[\]/]/.test(value)) {
     throw new Error("INVALID_PUBLIC_PATH_SEGMENT");
@@ -373,11 +432,47 @@ const centerConfigReference = (centerId: string) => {
   return ref(database, `centers/${publicPathSegment(centerId)}`);
 };
 
-export const writeCenterConfigRealtime = (center: CenterConfig) =>
-  set(centerConfigReference(center.centerId), withoutUndefined(center));
+const toPublicKioskConfig = (center: CenterConfig): PublicKioskConfig => ({
+  centerId: center.centerId,
+  enabled: center.enabled,
+  timezone: center.timezone,
+  serviceStartTime: center.serviceStartTime,
+  serviceEndTime: center.serviceEndTime,
+  kioskTimeoutSeconds: center.kioskTimeoutSeconds,
+  windows: center.windows.map((windowItem) => ({
+    enabled: windowItem.enabled,
+    displayOrder: windowItem.displayOrder,
+    windowNumber: windowItem.windowNumber,
+    serviceType: windowItem.serviceType,
+    serviceLabel: windowItem.serviceLabel,
+  })),
+});
 
-export const removeCenterConfigRealtime = (centerId: string) =>
-  remove(centerConfigReference(centerId));
+export const writePublicKioskConfigRealtime = (center: CenterConfig) => {
+  if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
+  return set(
+    ref(database, `public/kiosks/${publicPathSegment(center.centerId)}`),
+    toPublicKioskConfig(center),
+  );
+};
+
+export const writeCenterConfigRealtime = (center: CenterConfig) => {
+  if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
+  const centerId = publicPathSegment(center.centerId);
+  return update(ref(database), {
+    [`centers/${centerId}`]: withoutUndefined(center),
+    [`public/kiosks/${centerId}`]: toPublicKioskConfig(center),
+  });
+};
+
+export const removeCenterConfigRealtime = (centerId: string) => {
+  if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
+  const safeCenterId = publicPathSegment(centerId);
+  return update(ref(database), {
+    [`centers/${safeCenterId}`]: null,
+    [`public/kiosks/${safeCenterId}`]: null,
+  });
+};
 
 export const getCenterConfigRealtime = async (
   centerId: string,

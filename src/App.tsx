@@ -125,10 +125,13 @@ import {
   signOutCurrentUser,
   subscribeToOperationalDay,
   subscribeToPublicDisplay,
+  subscribeToPublicKioskConfig,
   subscribeToPublicTurnStatus,
   writeCenterConfigRealtime,
+  writePublicKioskConfigRealtime,
   type AuthSessionState,
   type OperationalDaySnapshot,
+  type PublicKioskConfig,
 } from "./services/firebase";
 
 const roleOptions: Role[] = [
@@ -985,33 +988,65 @@ interface KioskIssuedTicket {
   publicCode: string;
   publicToken: string;
   serviceLabel: string;
-  assignedWindowId: string;
   assignedWindowNumber: number;
 }
 
-const KioskView = ({ data }: { data: AppData }) => {
-  const center = getCurrentCenter(data);
+const kioskMinutesInTimezone = (timezone: string) => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  return hour * 60 + minute;
+};
+
+const isPublicKioskOpen = (center: PublicKioskConfig) => {
+  if (!center.enabled) return false;
+  const [startHour, startMinute] = center.serviceStartTime.split(":").map(Number);
+  const [endHour, endMinute] = center.serviceEndTime.split(":").map(Number);
+  const start = startHour * 60 + startMinute;
+  const end = endHour * 60 + endMinute;
+  const current = kioskMinutesInTimezone(center.timezone);
+  if (![start, end, current].every(Number.isFinite) || start === end) return false;
+  return start < end ? current >= start && current < end : current >= start || current < end;
+};
+
+const KioskView = ({ centerId }: { centerId: string }) => {
+  const [center, setCenter] = useState<PublicKioskConfig | null>(null);
   const [lastCase, setLastCase] = useState<KioskIssuedTicket | null>(null);
   const [pendingService, setPendingService] = useState<ServiceType | null>(null);
   const [creationError, setCreationError] = useState<string | null>(null);
   const [isCreatingTicket, setIsCreatingTicket] = useState(false);
-  const [remainingSeconds, setRemainingSeconds] = useState(center.kioskTimeoutSeconds);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
   const creatingTicketRef = useRef(false);
-  const centerIsOpen = isCenterOpenForTickets(center);
+  const centerIsOpen = center ? isPublicKioskOpen(center) : false;
   const pendingWindow = pendingService
-    ? center.windows
+    ? center?.windows
         .filter((item) => item.enabled && item.serviceType === pendingService)
         .sort((a, b) => a.displayOrder - b.displayOrder)[0]
     : undefined;
 
+  useEffect(() => {
+    setCenter(null);
+    try {
+      return subscribeToPublicKioskConfig(centerId, setCenter, () => setCenter(null));
+    } catch {
+      setCenter(null);
+      return undefined;
+    }
+  }, [centerId]);
+
   const createTicket = async (serviceType: ServiceType) => {
+    if (!center) return;
     if (creatingTicketRef.current) return;
     creatingTicketRef.current = true;
     setIsCreatingTicket(true);
     setCreationError(null);
 
-    const currentCenter = getCurrentCenter(data);
-    if (!isCenterOpenForTickets(currentCenter)) {
+    if (!isPublicKioskOpen(center)) {
       setPendingService(null);
       creatingTicketRef.current = false;
       setIsCreatingTicket(false);
@@ -1019,8 +1054,8 @@ const KioskView = ({ data }: { data: AppData }) => {
     }
 
     try {
-      const created = await createKioskArrivalCallable(currentCenter.centerId, serviceType);
-      const assignedWindow = currentCenter.windows
+      const created = await createKioskArrivalCallable(center.centerId, serviceType);
+      const assignedWindow = center.windows
         .filter((item) => item.enabled && item.serviceType === serviceType)
         .sort((a, b) => a.displayOrder - b.displayOrder)[0];
       if (!assignedWindow) return;
@@ -1028,10 +1063,9 @@ const KioskView = ({ data }: { data: AppData }) => {
       setLastCase({
         ...created,
         serviceLabel: assignedWindow.serviceLabel,
-        assignedWindowId: assignedWindow.windowId,
         assignedWindowNumber: assignedWindow.windowNumber,
       });
-      setRemainingSeconds(currentCenter.kioskTimeoutSeconds);
+      setRemainingSeconds(center.kioskTimeoutSeconds);
       setPendingService(null);
     } catch {
       setCreationError("No pudimos generar su número. Revise la conexión e intente nuevamente.");
@@ -1054,8 +1088,11 @@ const KioskView = ({ data }: { data: AppData }) => {
     return () => window.clearInterval(timer);
   }, [lastCase, remainingSeconds]);
 
+  if (!center) {
+    return <CenteredShell><Typography>Cargando configuración del centro...</Typography></CenteredShell>;
+  }
+
   if (lastCase) {
-    const windowItem = center.windows.find((item) => item.windowId === lastCase.assignedWindowId);
     const progress = center.kioskTimeoutSeconds
       ? (remainingSeconds / center.kioskTimeoutSeconds) * 100
       : 0;
@@ -1087,7 +1124,7 @@ const KioskView = ({ data }: { data: AppData }) => {
               </Typography>
               <Alert severity="info" icon={<Storefront />} sx={{ width: "100%", textAlign: "left" }}>
                 <Typography variant="h6" component="p" fontWeight={700}>
-                  Pase a Ventanilla {windowItem?.windowNumber ?? lastCase.assignedWindowNumber}
+                  Pase a Ventanilla {lastCase.assignedWindowNumber}
                 </Typography>
                 <Typography component="p">
                   Guarde este número. Lo necesitará durante todo el proceso.
@@ -1155,7 +1192,7 @@ const KioskView = ({ data }: { data: AppData }) => {
         {!centerIsOpen && (
           <Alert severity="warning" sx={{ textAlign: "left" }}>
             La generación de turnos está disponible solo dentro del horario de atención del centro:{" "}
-            <strong>{formatServiceHours(center)}</strong>. Las métricas de jornadas anteriores se conservan para consulta
+            <strong>{center.serviceStartTime} a {center.serviceEndTime}</strong>. Las métricas de jornadas anteriores se conservan para consulta
             administrativa.
           </Alert>
         )}
@@ -3710,6 +3747,8 @@ const App = () => {
           const existingCenter = await getCenterConfigRealtime(center.centerId);
           if (!cancelled && !existingCenter) {
             await writeCenterConfigRealtime(center);
+          } else if (!cancelled && existingCenter) {
+            await writePublicKioskConfigRealtime(existingCenter);
           }
         } catch (error) {
           console.error(
@@ -3867,7 +3906,7 @@ const App = () => {
   return (
     <>
       <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? () => void signOutCurrentUser() : undefined} />
-      {effectiveRole === "kiosk" && <KioskView data={data} />}
+      {effectiveRole === "kiosk" && <KioskView centerId={data.selectedCenterId} />}
       {effectiveRole.startsWith("operator") && activeOperatorWindow && (
         <OperatorView operatorWindow={activeOperatorWindow} role={effectiveRole} data={privateData} setData={setData} />
       )}
