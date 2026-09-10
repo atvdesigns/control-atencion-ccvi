@@ -3,10 +3,12 @@ import {
   AddBusiness,
   AssignmentTurnedIn,
   Badge,
+  BusinessCenter,
   Campaign,
   CheckCircle,
   Dashboard,
   Description,
+  DirectionsCar,
   DisplaySettings,
   DeleteOutline,
   Edit,
@@ -517,13 +519,22 @@ const Header = ({
         <AppLogo size={56} />
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
           <Typography variant="h6" sx={{ lineHeight: 1.1 }}>
-            Control de Atención CCVI
+            {role === "kiosk" ? center.name : "Control de Atención CCVI"}
           </Typography>
           <Typography variant="body2" sx={{ opacity: 0.82 }}>
-            {center.name} · Gestión paperless y cola de caja en tiempo real
+            {role === "kiosk"
+              ? "CCVI · Centro de atención"
+              : `${center.name} · Gestión paperless y cola de caja en tiempo real`}
           </Typography>
         </Box>
-        <Chip label={hasFirebaseConfig ? "Firebase listo" : "Demo local"} color="secondary" />
+        {role === "kiosk" && (
+          <Typography
+            variant="h6"
+            sx={{ display: { xs: "none", xl: "block" }, opacity: 0.82, whiteSpace: "nowrap" }}
+          >
+            Tótem de autoatención
+          </Typography>
+        )}
         {!onLogout && <HeaderSelect label="Rol" minWidth={220}>
           <Select
             value={role}
@@ -552,6 +563,7 @@ const Header = ({
             ))}
           </Select>
         </HeaderSelect>
+        <Chip label={hasFirebaseConfig ? "Firebase listo" : "Demo local"} color="secondary" />
         {onLogout && <Button color="inherit" onClick={onLogout}>Cerrar sesión</Button>}
       </Toolbar>
     </AppBar>
@@ -1098,97 +1110,187 @@ const KioskView = ({ centerId }: { centerId: string }) => {
       : 0;
 
     return (
-      <CenteredShell>
-        <Card sx={{ width: "min(720px, 100%)" }}>
-          <CardContent>
-            <Stack spacing={4} alignItems="center" textAlign="center">
+      <Box
+        sx={{
+          minHeight: "calc(100vh - 80px)",
+          display: "grid",
+          placeItems: "center",
+          px: { xs: 2, sm: 3 },
+          py: { xs: 3, md: 4 },
+          bgcolor: ccviPalette.navy,
+          backgroundImage:
+            "linear-gradient(rgba(0,0,0,0.52), rgba(0,0,0,0.52)), url('/ccvi-login-background.png')",
+          backgroundSize: "cover",
+          backgroundPosition: { xs: "62% center", md: "center" },
+        }}
+      >
+        <Card
+          sx={{
+            position: "relative",
+            width: "min(640px, 100%)",
+            borderRadius: 3,
+            overflow: "hidden",
+            boxShadow: "0 16px 32px rgba(0,0,0,0.25), 0 4px 8px rgba(0,0,0,0.1)",
+          }}
+        >
+          <Box
+            sx={{
+              width: "fit-content",
+              maxWidth: "calc(100% - 32px)",
+              mx: "auto",
+              px: 2,
+              py: 1,
+              bgcolor: ccviPalette.navy,
+              color: "common.white",
+              borderRadius: "0 0 12px 12px",
+              textAlign: "center",
+            }}
+          >
+            <Typography variant="caption" fontWeight={700}>
+              {lastCase.serviceLabel}
+            </Typography>
+          </Box>
+          <CardContent sx={{ px: { xs: 2.5, sm: 4 }, pt: 1.5, pb: { xs: 3, sm: 2.5 }, "&:last-child": { pb: { xs: 3, sm: 2.5 } } }}>
+            <Stack spacing={2} alignItems="center" textAlign="center">
               <Box role="status" aria-live="polite" aria-atomic="true">
-                <Typography variant="h6" color="text.secondary">
+                <Typography fontWeight={600} color="text.secondary">
                   Su número de atención es
                 </Typography>
                 <Typography
                   variant="h1"
                   aria-label={getAccessiblePublicCode(lastCase.publicCode)}
                   sx={{
-                    mt: 1,
+                    mt: 0.5,
                     color: ccviPalette.navy,
                     fontVariantNumeric: "tabular-nums",
-                    fontSize: { xs: "4rem", md: "6.5rem" },
+                    fontSize: { xs: "4.5rem", sm: "5.5rem" },
+                    lineHeight: 1.08,
                   }}
                 >
                   {lastCase.publicCode}
                 </Typography>
               </Box>
-              <Typography variant="h5" component="p" fontWeight={700}>
-                {lastCase.serviceLabel}
-              </Typography>
-              <Alert severity="info" icon={<Storefront />} sx={{ width: "100%", textAlign: "left" }}>
-                <Typography variant="h6" component="p" fontWeight={700}>
-                  Pase a Ventanilla {lastCase.assignedWindowNumber}
-                </Typography>
-                <Typography component="p">
-                  Guarde este número. Lo necesitará durante todo el proceso.
-                </Typography>
-              </Alert>
-              <Stack direction={{ xs: "column", sm: "row" }} spacing={3} alignItems="center">
-                <QRCodeSVG
-                  value={getPublicStatusUrl(lastCase.publicToken)}
-                  size={148}
-                  title={`Código QR del número de atención ${lastCase.publicCode}`}
-                />
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={{ xs: 2, sm: 2.5 }}
+                alignItems="center"
+                width="100%"
+              >
+                <Box
+                  sx={{
+                    width: 152,
+                    height: 152,
+                    p: 1.25,
+                    borderRadius: 1.5,
+                    border: `1px solid ${ccviPalette.border}`,
+                    bgcolor: "#F9FAFB",
+                    display: "grid",
+                    placeItems: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  <QRCodeSVG
+                    value={getPublicStatusUrl(lastCase.publicToken)}
+                    size={128}
+                    title={`Código QR del número de atención ${lastCase.publicCode}`}
+                  />
+                </Box>
                 <Box textAlign={{ xs: "center", sm: "left" }}>
-                  <Typography variant="h6">Guarde su número de atención</Typography>
-                  <Typography color="text.secondary">
+                  <Typography fontWeight={700}>Guarde su número de atención</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, lineHeight: 1.5 }}>
                     Tome una fotografía de esta pantalla o escanee el código QR.
                   </Typography>
-                  <Typography color="text.secondary">
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, lineHeight: 1.5 }}>
                     En esta página podrá consultar su número, la ventanilla asignada y, posteriormente, la caja a la
                     que deberá dirigirse.
                   </Typography>
                 </Box>
               </Stack>
+              <Alert
+                severity="info"
+                icon={<Storefront sx={{ fontSize: 30 }} />}
+                sx={{ width: "100%", textAlign: "left", borderRadius: 1.5, py: 1, alignItems: "center", bgcolor: "#E1F7FE" }}
+              >
+                <Typography component="p" fontWeight={700}>
+                  Pase a Ventanilla {lastCase.assignedWindowNumber}
+                </Typography>
+                <Typography component="p" variant="body2">
+                  Guarde este número. Lo necesitará durante todo el proceso.
+                </Typography>
+              </Alert>
               <Box sx={{ width: "100%" }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                   Esta pantalla volverá al inicio en {remainingSeconds} segundos.
                 </Typography>
-                <LinearProgress variant="determinate" value={progress} sx={{ width: "100%" }} />
+                <LinearProgress variant="determinate" value={progress} sx={{ width: "100%", height: 4, borderRadius: 2 }} />
               </Box>
-              <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
-                <Button variant="outlined" onClick={() => setRemainingSeconds(center.kioskTimeoutSeconds)}>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} justifyContent="center" width="100%">
+                <Button
+                  variant="outlined"
+                  onClick={() => setRemainingSeconds(center.kioskTimeoutSeconds)}
+                  sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 220 }, borderWidth: 2 }}
+                >
                   Necesito más tiempo
                 </Button>
-                <Button variant="contained" onClick={() => setLastCase(null)}>
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  onClick={() => setLastCase(null)}
+                  sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 132 } }}
+                >
                   Finalizar
                 </Button>
               </Stack>
             </Stack>
           </CardContent>
         </Card>
-      </CenteredShell>
+      </Box>
     );
   }
 
+  const representationWindow = center.windows
+    .filter((item) => item.enabled && item.serviceType === "representation")
+    .sort((a, b) => a.displayOrder - b.displayOrder)[0];
+  const ownerWindow = center.windows
+    .filter((item) => item.enabled && item.serviceType === "vehicle_owner")
+    .sort((a, b) => a.displayOrder - b.displayOrder)[0];
+
   return (
-    <CenteredShell>
-      <Stack spacing={4} textAlign="center" width="min(920px, 100%)">
-        <Stack alignItems="center">
-          <AppLogo size={112} />
-        </Stack>
-        <Box>
+    <Box
+      sx={{
+        minHeight: "calc(100vh - 80px)",
+        bgcolor: ccviPalette.navy,
+        backgroundImage:
+          "linear-gradient(180deg, rgba(8, 20, 36, 0.66) 0%, rgba(8, 20, 36, 0.78) 100%), url('/ccvi-login-background.png')",
+        backgroundSize: "cover",
+        backgroundPosition: { xs: "62% center", md: "center" },
+        px: { xs: 2, sm: 3, md: 6 },
+        py: { xs: 3, sm: 4, md: 5 },
+      }}
+    >
+      <Stack spacing={{ xs: 3, md: 4.5 }} textAlign="center" width="100%" maxWidth={1440} mx="auto">
+        <Stack spacing={1.25} alignItems="center">
           <Typography
-            variant="h2"
+            variant="h3"
             sx={{
-              color: ccviPalette.navy,
-              fontSize: { xs: "2.35rem", sm: "3.25rem", md: "4.5rem" },
-              lineHeight: 1.08,
+              color: "common.white",
+              fontSize: { xs: "2.5rem", md: "3rem" },
+              lineHeight: 1.2,
+              textShadow: "0 2px 18px rgba(0,0,0,0.28)",
             }}
           >
-            Bienvenido al Centro de Custodia de Vehículos Infractores
+            Bienvenido
           </Typography>
-          <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>
+          <Typography
+            variant="h4"
+            sx={{ color: "common.white", fontSize: { xs: "1.65rem", sm: "2rem", md: "2.25rem" } }}
+          >
+            Centro de Custodia de Vehículos Infractores
+          </Typography>
+          <Typography variant="h6" sx={{ color: "rgba(255,255,255,0.88)" }}>
             ¿Qué tipo de atención necesita?
           </Typography>
-        </Box>
+        </Stack>
         {!centerIsOpen && (
           <Alert severity="warning" sx={{ textAlign: "left" }}>
             La generación de turnos está disponible solo dentro del horario de atención del centro:{" "}
@@ -1196,23 +1298,56 @@ const KioskView = ({ centerId }: { centerId: string }) => {
             administrativa.
           </Alert>
         )}
-        <Grid container spacing={3}>
+        <Grid container spacing={{ xs: 2, md: 4 }} alignItems="stretch">
           <Grid item xs={12} md={6}>
             <Button
               fullWidth
               size="large"
               variant="contained"
               color="secondary"
-              startIcon={<Gavel />}
               disabled={!centerIsOpen}
               onClick={() => setPendingService("representation")}
-              sx={{ minHeight: 160, fontSize: 20, whiteSpace: "normal" }}
+              sx={{
+                minHeight: { xs: 232, sm: 250, md: 280 },
+                height: "100%",
+                p: { xs: 2.5, md: 4 },
+                bgcolor: "#E8751A",
+                backgroundImage: "linear-gradient(118deg, #E8751A 0%, #F58220 58%, #FF9B42 100%)",
+                borderRadius: "20px",
+                whiteSpace: "normal",
+                textAlign: "left",
+                alignItems: "stretch",
+                boxShadow: "0 8px 32px rgba(0, 0, 0, 0.12)",
+                transition: "transform 160ms ease, box-shadow 160ms ease, filter 160ms ease",
+                "&:hover": {
+                  bgcolor: "#E8751A",
+                  backgroundImage: "linear-gradient(118deg, #D96812 0%, #EF7615 58%, #F78C31 100%)",
+                  boxShadow: "0 12px 36px rgba(0, 0, 0, 0.2)",
+                  transform: "translateY(-2px)",
+                },
+                "&.Mui-focusVisible": { outline: "3px solid #FFFFFF", outlineOffset: 4 },
+                "&.Mui-disabled": { color: "rgba(255,255,255,0.78)", opacity: 0.62 },
+              }}
             >
-              <Stack spacing={1}>
-                <span>Representación, empresa o poder notarial</span>
-                <Typography component="span" variant="body2">
-                  Será atendido en Ventanilla 1.
-                </Typography>
+              <Stack spacing={3} width="100%" justifyContent="space-between">
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={2.5} alignItems={{ xs: "flex-start", sm: "center" }}>
+                  <Box sx={{ width: 76, height: 76, borderRadius: 1.5, bgcolor: "white", color: "#E8751A", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                    <BusinessCenter sx={{ fontSize: 42 }} />
+                  </Box>
+                  <Typography
+                    component="span"
+                    variant="h4"
+                    color="common.white"
+                    sx={{ fontSize: { xs: "1.75rem", sm: "2.125rem" }, overflowWrap: "break-word", wordBreak: "normal" }}
+                  >
+                    Representación, empresa o poder notarial
+                  </Typography>
+                </Stack>
+                <Box sx={{ bgcolor: "white", color: ccviPalette.navy, borderRadius: 1, px: 2, py: 1.75 }}>
+                  <Typography component="span">
+                    Será atendido en: <strong>Ventanilla {representationWindow?.windowNumber ?? "sin asignar"}</strong>
+                  </Typography>
+                </Box>
               </Stack>
             </Button>
           </Grid>
@@ -1221,23 +1356,75 @@ const KioskView = ({ centerId }: { centerId: string }) => {
               fullWidth
               size="large"
               variant="contained"
-              startIcon={<Person />}
               disabled={!centerIsOpen}
               onClick={() => setPendingService("vehicle_owner")}
-              sx={{ minHeight: 160, fontSize: 20, whiteSpace: "normal" }}
+              sx={{
+                minHeight: { xs: 232, sm: 250, md: 280 },
+                height: "100%",
+                p: { xs: 2.5, md: 4 },
+                bgcolor: ccviPalette.navy,
+                backgroundImage: "linear-gradient(118deg, #1B2A4A 0%, #173D8F 62%, #1257F5 100%)",
+                borderRadius: "20px",
+                whiteSpace: "normal",
+                textAlign: "left",
+                alignItems: "stretch",
+                boxShadow: "0 8px 32px rgba(0, 0, 0, 0.12)",
+                transition: "transform 160ms ease, box-shadow 160ms ease, filter 160ms ease",
+                "&:hover": {
+                  bgcolor: ccviPalette.navy,
+                  backgroundImage: "linear-gradient(118deg, #111D36 0%, #12367F 62%, #0D49D4 100%)",
+                  boxShadow: "0 12px 36px rgba(0, 0, 0, 0.2)",
+                  transform: "translateY(-2px)",
+                },
+                "&.Mui-focusVisible": { outline: "3px solid #FFFFFF", outlineOffset: 4 },
+                "&.Mui-disabled": { color: "rgba(255,255,255,0.78)", opacity: 0.62 },
+              }}
             >
-              <Stack spacing={1}>
-                <span>Propietario del vehículo retenido</span>
-                <Typography component="span" variant="body2">
-                  Será atendido en Ventanilla 2.
-                </Typography>
+              <Stack spacing={3} width="100%" justifyContent="space-between">
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={2.5} alignItems={{ xs: "flex-start", sm: "center" }}>
+                  <Box sx={{ width: 76, height: 76, borderRadius: 1.5, bgcolor: "white", color: ccviPalette.navy, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                    <DirectionsCar sx={{ fontSize: 46 }} />
+                  </Box>
+                  <Typography
+                    component="span"
+                    variant="h4"
+                    color="common.white"
+                    sx={{ fontSize: { xs: "1.75rem", sm: "2.125rem" }, overflowWrap: "break-word", wordBreak: "normal" }}
+                  >
+                    Propietario del vehículo retenido
+                  </Typography>
+                </Stack>
+                <Box sx={{ bgcolor: "white", color: ccviPalette.navy, borderRadius: 1, px: 2, py: 1.75 }}>
+                  <Typography component="span">
+                    Será atendido en: <strong>Ventanilla {ownerWindow?.windowNumber ?? "sin asignar"}</strong>
+                  </Typography>
+                </Box>
               </Stack>
             </Button>
           </Grid>
         </Grid>
-        <Alert severity="success" icon={<QrCode2 />}>
-          Su número se mostrará en pantalla. Puede guardarlo con una fotografía o mediante el código QR.
-        </Alert>
+        <Paper
+          variant="outlined"
+          sx={{
+            bgcolor: "rgba(239, 248, 245, 0.94)",
+            borderColor: "rgba(255,255,255,0.48)",
+            borderRadius: 2,
+            p: { xs: 2, md: 2.25 },
+            textAlign: "left",
+            boxShadow: "0 8px 28px rgba(0,0,0,0.12)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ xs: "flex-start", sm: "center" }}>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ color: ccviPalette.success, flexShrink: 0 }}>
+              <QrCode2 />
+              <Typography fontWeight={700}>Soporte QR</Typography>
+            </Stack>
+            <Typography>
+              Su número se mostrará en pantalla. Puede guardarlo con una fotografía o mediante el código QR.
+            </Typography>
+          </Stack>
+        </Paper>
         <Dialog
           open={Boolean(pendingService)}
           onClose={() => setPendingService(null)}
@@ -1245,47 +1432,92 @@ const KioskView = ({ centerId }: { centerId: string }) => {
           maxWidth="sm"
           aria-labelledby="kiosk-confirmation-title"
           aria-describedby="kiosk-confirmation-description"
+          BackdropProps={{
+            sx: {
+              background:
+                "linear-gradient(180deg, rgba(27,42,74,0.7) 0%, rgba(17,24,39,0.86) 100%)",
+            },
+          }}
+          PaperProps={{
+            sx: {
+              width: "calc(100% - 32px)",
+              maxWidth: 640,
+              maxHeight: "calc(100% - 32px)",
+              m: 2,
+              borderRadius: 3,
+              boxShadow: "0 16px 32px rgba(0,0,0,0.25), 0 4px 8px rgba(0,0,0,0.1)",
+              overflow: "hidden",
+            },
+          }}
         >
-          <DialogTitle id="kiosk-confirmation-title">Antes de continuar</DialogTitle>
-          <DialogContent>
+          <DialogTitle sx={{ px: { xs: 2.5, sm: 4 }, pt: { xs: 2.5, sm: 3 }, pb: 1.5 }}>
+            <Stack direction="row" spacing={2} alignItems="center">
+              <AppLogo size={56} />
+              <Typography
+                id="kiosk-confirmation-description"
+                variant="h6"
+                component="p"
+                fontWeight={700}
+                color="primary"
+                sx={{ lineHeight: 1.3 }}
+              >
+                {pendingService ? serviceLabels[pendingService] : ""}
+              </Typography>
+            </Stack>
+          </DialogTitle>
+          <DialogContent sx={{ px: { xs: 2.5, sm: 4 }, pb: 1 }}>
             {pendingService && (
-              <Stack spacing={3} sx={{ pt: 1 }}>
-                <Typography id="kiosk-confirmation-description" variant="h6" component="p" fontWeight={700}>
-                  {serviceLabels[pendingService]}
+              <Stack spacing={{ xs: 2.5, sm: 3 }}>
+                <Typography variant="h5" component="h2" fontWeight={700}>
+                  Antes de continuar
                 </Typography>
-                <Box component="ol" sx={{ m: 0, pl: 3.5 }}>
-                  <Box component="li" sx={{ mb: 2 }}>
-                    <Typography variant="h6" component="h3" fontWeight={700}>
+                <Box
+                  component="ol"
+                  sx={{
+                    m: 0,
+                    pl: 3,
+                    display: "grid",
+                    gap: 2.25,
+                    "& > li": { pl: 0.5 },
+                    "& > li::marker": { color: "text.secondary", fontWeight: 700 },
+                  }}
+                >
+                  <Box component="li">
+                    <Typography component="h3" fontWeight={700}>
                       Guarde su número
                     </Typography>
-                    <Typography color="text.secondary">
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, lineHeight: 1.5 }}>
                       Saque su celular y tome una fotografía de la pantalla o escanee el código QR.
                     </Typography>
-                    <Typography color="text.secondary">
+                    <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
                       Necesitará este número durante todo el proceso.
                     </Typography>
                   </Box>
-                  <Box component="li" sx={{ mb: 2 }}>
-                    <Typography variant="h6" component="h3" fontWeight={700}>
+                  <Box component="li">
+                    <Typography component="h3" fontWeight={700}>
                       Pase al área de espera
                     </Typography>
-                    <Typography color="text.secondary">
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, lineHeight: 1.5 }}>
                       Su atención corresponde a Ventanilla {pendingWindow?.windowNumber ?? "sin asignar"}.
                     </Typography>
                   </Box>
                   <Box component="li">
-                    <Typography variant="h6" component="h3" fontWeight={700}>
+                    <Typography component="h3" fontWeight={700}>
                       Espere el llamado
                     </Typography>
-                    <Typography color="text.secondary">
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, lineHeight: 1.5 }}>
                       Mire el monitor y mantenga su documentación preparada.
                     </Typography>
                   </Box>
                 </Box>
                 {pendingWindow ? (
-                  <Alert severity="info" icon={<Storefront />}>
-                    <Typography component="p" fontWeight={700}>
-                      Será atendido en Ventanilla {pendingWindow.windowNumber}
+                  <Alert
+                    severity="info"
+                    icon={<Storefront sx={{ fontSize: 30 }} />}
+                    sx={{ borderRadius: 1.5, py: 1, alignItems: "center", bgcolor: "#E1F7FE" }}
+                  >
+                    <Typography component="p">
+                      Será atendido en <strong>Ventanilla {pendingWindow.windowNumber}</strong>
                     </Typography>
                   </Alert>
                 ) : (
@@ -1297,21 +1529,36 @@ const KioskView = ({ centerId }: { centerId: string }) => {
               </Stack>
             )}
           </DialogContent>
-          <DialogActions sx={{ px: 3, pb: 3, gap: 1.5, flexDirection: { xs: "column-reverse", sm: "row" } }}>
-            <Button fullWidth={false} variant="outlined" onClick={() => setPendingService(null)}>
-              Volver
+          <DialogActions
+            sx={{
+              px: { xs: 2.5, sm: 4 },
+              pt: 2,
+              pb: { xs: 2.5, sm: 4 },
+              gap: 1.5,
+              justifyContent: "center",
+              flexDirection: { xs: "column-reverse", sm: "row" },
+              "& > :not(style) ~ :not(style)": { ml: 0 },
+            }}
+          >
+            <Button
+              variant="outlined"
+              onClick={() => setPendingService(null)}
+              sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 132 }, borderWidth: 2 }}
+            >
+              Cancelar
             </Button>
             <Button
               variant="contained"
               disabled={!centerIsOpen || !pendingWindow || !pendingService || isCreatingTicket}
               onClick={() => pendingService && createTicket(pendingService)}
+              sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 250 }, px: 4 }}
             >
               {isCreatingTicket ? "Generando número..." : "Confirmar y obtener número"}
             </Button>
           </DialogActions>
         </Dialog>
       </Stack>
-    </CenteredShell>
+    </Box>
   );
 };
 
