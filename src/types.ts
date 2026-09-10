@@ -94,6 +94,15 @@ export interface PublicDisplayEntry {
   updatedAt: number;
 }
 
+export interface PublicDisplayCallEvent {
+  eventId: string;
+  publicCode: string;
+  isPriority: boolean;
+  destinationType: "window" | "cashier";
+  destinationLabel: string;
+  calledAt: number;
+}
+
 export interface WindowConfig {
   windowId: string;
   centerId: string;

@@ -19,11 +19,13 @@ import {
 } from "./centerJourneyConfig";
 import {
   database,
+  publicDisplayCallEventUpdate,
   publicDisplayEntryUpdate,
   publicTurnStatusUpdate,
   ref,
   runTransaction,
   toPublicDisplayEntry,
+  toPublicDisplayCallEvent,
   toPublicTurnStatus,
   update,
 } from "./services/firebase";
@@ -544,8 +546,22 @@ const syncPublicCaseProjection = async (
   caseItem: CaseRecord,
   center: CenterConfig,
   dayId: string,
+  call?: {
+    eventId: string;
+    destinationType: "window" | "cashier";
+    calledAt: number;
+  },
 ) => {
   if (!database) return;
+  const displayCall = call
+    ? toPublicDisplayCallEvent(
+        caseItem,
+        center,
+        call.eventId,
+        call.destinationType,
+        call.calledAt,
+      )
+    : null;
   await update(ref(database), {
     ...publicTurnStatusUpdate(
       caseItem.publicToken,
@@ -557,6 +573,9 @@ const syncPublicCaseProjection = async (
       caseItem.caseId,
       toPublicDisplayEntry(caseItem, center),
     ),
+    ...(displayCall
+      ? publicDisplayCallEventUpdate(caseItem.centerId, dayId, displayCall)
+      : {}),
   });
 };
 
@@ -1262,6 +1281,7 @@ export const callNextForOperatorRealtime = async (
     committedCase,
     getCurrentCenter(base),
     session.date,
+    { eventId, destinationType: "window", calledAt: now },
   );
 
   return {
@@ -2455,6 +2475,7 @@ export const callNextForCashierRealtime = async (
     committedCase,
     getCurrentCenter(base),
     session.date,
+    { eventId, destinationType: "cashier", calledAt: now },
   );
 
   return {

@@ -70,7 +70,7 @@ import {
   Typography,
 } from "@mui/material";
 import { QRCodeSVG } from "qrcode.react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PublicJourneyStepper } from "./components/PublicJourneyStepper";
 import { PublicJourneyInformation } from "./components/PublicJourneyInformation";
 import {
@@ -78,7 +78,7 @@ import {
   getPublicJourneyStep,
   isVisiblePublicCode,
 } from "./publicJourney";
-import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, PublicDisplayEntry, PublicTurnStatus, Role, ServiceType, SessionMetadata } from "./types";
+import type { AppData, CaseRecord, CenterConfig, Metrics, PriorityType, PublicDisplayCallEvent, PublicDisplayEntry, PublicTurnStatus, Role, ServiceType, SessionMetadata } from "./types";
 import { ccviBackgroundGradient, ccviPalette } from "./theme";
 import {
   calculateMetrics,
@@ -127,6 +127,7 @@ import {
   signOutCurrentUser,
   subscribeToOperationalDay,
   subscribeToPublicDisplay,
+  subscribeToPublicDisplayCalls,
   subscribeToPublicKioskConfig,
   subscribeToPublicTurnStatus,
   writeCenterConfigRealtime,
@@ -469,6 +470,8 @@ const printMetricsPdf = (center: CenterConfig, session: SessionMetadata, metrics
 };
 
 const getRoleFromUrl = (): Role => {
+  if (window.location.pathname === "/totem") return "kiosk";
+  if (window.location.pathname === "/monitor") return "display";
   const raw = new URLSearchParams(window.location.search).get("role");
   const stored = window.localStorage.getItem("ccvi-role") as Role | null;
   return raw === "display" || raw === "kiosk"
@@ -497,6 +500,39 @@ const Header = ({
   const centerOptions = Object.values(data.centers).filter(
     (centerOption) => !allowedCenterIds || allowedCenterIds.includes(centerOption.centerId),
   );
+
+  if (role === "display") {
+    return (
+      <AppBar position="relative" color="primary" elevation={0}>
+        <Toolbar
+          sx={{
+            minHeight: { xs: 80, md: 92 },
+            px: { xs: 2, sm: 3, md: 5 },
+            maxWidth: 1536,
+            mx: "auto",
+            width: "100%",
+            gap: 2,
+          }}
+        >
+          <AppLogo size={56} />
+          <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+            <Typography variant="h6" sx={{ color: "white", lineHeight: 1.2 }}>
+              Centro de Custodia de Vehículos Infractores
+            </Typography>
+            <Typography variant="body2" sx={{ color: "rgba(255,255,255,0.72)" }}>
+              CCVI · {center.name}
+            </Typography>
+          </Box>
+          <Typography
+            variant="subtitle1"
+            sx={{ color: "rgba(255,255,255,0.82)", display: { xs: "none", sm: "block" } }}
+          >
+            Monitor de atención
+          </Typography>
+        </Toolbar>
+      </AppBar>
+    );
+  }
 
   return (
     <AppBar
@@ -745,54 +781,13 @@ const publicCodeWindowNumber = (publicCode: string) => {
   return match ? Number(match[1]) : 0;
 };
 
-const numericSuffix = (value: string | null | undefined) => {
-  const match = value?.match(/(\d+)$/);
-  return match ? Number(match[1]) : 0;
+const displayAccentFor = (entry: PublicDisplayCallEvent) => {
+  if (entry.destinationType === "cashier") return "#2F6FED";
+  return publicCodeWindowNumber(entry.publicCode) === 1 ? ccviPalette.orange : ccviPalette.navy;
 };
 
-const displayWindowTones = [
-  { background: "#147EA3", border: "#8FD4E8", shadow: "rgba(20, 126, 163, 0.22)" },
-  { background: "#9A642E", border: "#D7A46F", shadow: "rgba(154, 100, 46, 0.24)" },
-  { background: "#C45A0A", border: "#FFB27A", shadow: "rgba(196, 90, 10, 0.22)" },
-  { background: "#173D4F", border: "#8FD4E8", shadow: "rgba(23, 61, 79, 0.24)" },
-  { background: "#4F5D75", border: "#BAC5D8", shadow: "rgba(79, 93, 117, 0.22)" },
-  { background: "#5C4B7D", border: "#C9BCE8", shadow: "rgba(92, 75, 125, 0.22)" },
-  { background: "#27705D", border: "#9DD4C3", shadow: "rgba(39, 112, 93, 0.22)" },
-  { background: "#7A5A17", border: "#DEC271", shadow: "rgba(122, 90, 23, 0.22)" },
-];
-
-const displayCashierTones = [
-  { background: "#102B63", border: "#AFC7F6", shadow: "rgba(16, 43, 99, 0.24)" },
-  { background: "#123C7A", border: "#A7C7F2", shadow: "rgba(18, 60, 122, 0.24)" },
-  { background: "#0F4C81", border: "#9FD3F2", shadow: "rgba(15, 76, 129, 0.24)" },
-  { background: "#173D4F", border: "#8FD4E8", shadow: "rgba(23, 61, 79, 0.24)" },
-  { background: "#111B32", border: "#B8C3D9", shadow: "rgba(17, 27, 50, 0.24)" },
-  { background: "#1E3A8A", border: "#B7C9F5", shadow: "rgba(30, 58, 138, 0.24)" },
-  { background: "#075985", border: "#9BD6F7", shadow: "rgba(7, 89, 133, 0.24)" },
-  { background: "#164E63", border: "#99D5E8", shadow: "rgba(22, 78, 99, 0.24)" },
-];
-
-const displayToneFor = (entry: PublicDisplayEntry, mode: "window" | "cashier") => {
-  if (mode === "cashier") {
-    const cashierIndex = Math.max(numericSuffix(entry.destination), 1) - 1;
-    const tone = displayCashierTones[cashierIndex % displayCashierTones.length];
-
-    return {
-      ...tone,
-      text: "#FFFFFF",
-      muted: "rgba(255,255,255,0.78)",
-    };
-  }
-
-  const toneIndex = Math.max(publicCodeWindowNumber(entry.publicCode), 1) - 1;
-  const tone = displayWindowTones[toneIndex % displayWindowTones.length];
-
-  return {
-    ...tone,
-    text: "#FFFFFF",
-    muted: "rgba(255,255,255,0.82)",
-  };
-};
+const monitorDestinationLabel = (destination: string) =>
+  destination.replace(/^Ventanilla\b/i, "Ventana");
 
 const playDisplayCallSound = () => {
   try {
@@ -2589,160 +2584,335 @@ const PaymentIssueDialog = ({
 };
 
 const DisplayView = ({ data }: { data: AppData }) => {
-  const lastCallSignatureRef = useRef("");
   const dayId = getCurrentSession(data)?.date;
-  const [entries, setEntries] = useState<PublicDisplayEntry[]>([]);
+  const [events, setEvents] = useState<PublicDisplayCallEvent[]>([]);
+  const [activeEntries, setActiveEntries] = useState<PublicDisplayEntry[]>([]);
+  const [currentCall, setCurrentCall] = useState<PublicDisplayCallEvent | null>(null);
+  const [pendingCalls, setPendingCalls] = useState<PublicDisplayCallEvent[]>([]);
+  const knownEventIdsRef = useRef(new Set<string>());
+  const initializedRef = useRef(false);
+  const currentShownAtRef = useRef(0);
 
   useEffect(() => {
-    setEntries([]);
+    setEvents([]);
+    setCurrentCall(null);
+    setPendingCalls([]);
+    knownEventIdsRef.current = new Set();
+    initializedRef.current = false;
+    currentShownAtRef.current = 0;
+    if (!dayId) return undefined;
+    try {
+      return subscribeToPublicDisplayCalls(
+        data.selectedCenterId,
+        dayId,
+        (nextEvents) => {
+          setEvents(nextEvents);
+          if (!initializedRef.current) {
+            initializedRef.current = true;
+            knownEventIdsRef.current = new Set(nextEvents.map((event) => event.eventId));
+            const latest = nextEvents[nextEvents.length - 1] ?? null;
+            setCurrentCall(latest);
+            currentShownAtRef.current = latest ? Date.now() : 0;
+            return;
+          }
+
+          const newEvents = nextEvents.filter(
+            (event) => !knownEventIdsRef.current.has(event.eventId),
+          );
+          nextEvents.forEach((event) => knownEventIdsRef.current.add(event.eventId));
+          if (newEvents.length > 0) {
+            setPendingCalls((current) => [...current, ...newEvents]
+              .sort((a, b) => a.calledAt - b.calledAt || a.eventId.localeCompare(b.eventId)));
+          }
+        },
+        () => setEvents([]),
+      );
+    } catch {
+      setEvents([]);
+      return undefined;
+    }
+  }, [data.selectedCenterId, dayId]);
+
+  useEffect(() => {
+    setActiveEntries([]);
     if (!dayId) return undefined;
     try {
       return subscribeToPublicDisplay(
         data.selectedCenterId,
         dayId,
-        setEntries,
-        () => setEntries([]),
+        setActiveEntries,
+        () => setActiveEntries([]),
       );
     } catch {
-      setEntries([]);
+      setActiveEntries([]);
       return undefined;
     }
   }, [data.selectedCenterId, dayId]);
 
-  const windowCalls = entries
-    .filter((entry) => /^Ventanilla\b/i.test(entry.destination))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 4);
-  const cashierCalls = entries
-    .filter((entry) => /^Caja\b/i.test(entry.destination))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 6);
-  const callSignature = [...windowCalls, ...cashierCalls]
-    .map((entry) => `${entry.publicCode}:${entry.destination}:${entry.updatedAt}`)
-    .join("|");
-
   useEffect(() => {
-    if (!callSignature) {
-      lastCallSignatureRef.current = "";
-      return;
-    }
+    if (pendingCalls.length === 0) return undefined;
+    const elapsed = currentCall ? Date.now() - currentShownAtRef.current : 6000;
+    const delay = currentCall ? Math.max(0, 6000 - elapsed) : 0;
+    const timer = window.setTimeout(() => {
+      setPendingCalls((queued) => {
+        const [next, ...remaining] = queued;
+        if (!next) return queued;
+        setCurrentCall(next);
+        currentShownAtRef.current = Date.now();
+        playDisplayCallSound();
+        return remaining;
+      });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [currentCall, pendingCalls]);
 
-    if (lastCallSignatureRef.current && lastCallSignatureRef.current !== callSignature) {
-      playDisplayCallSound();
-    }
-
-    lastCallSignatureRef.current = callSignature;
-  }, [callSignature]);
+  const newestEvents = [...events].sort((a, b) => b.calledAt - a.calledAt);
+  const recentCalls = newestEvents.slice(0, 5);
+  const activeCalls = activeEntries
+    .filter((entry) => /^Diríjase a\b/i.test(entry.status))
+    .map((entry): PublicDisplayCallEvent => ({
+      eventId: `active-${entry.publicCode}-${entry.destination}-${entry.updatedAt}`,
+      publicCode: entry.publicCode,
+      isPriority: entry.isPriority,
+      destinationType: /^Ventanilla\b/i.test(entry.destination) ? "window" : "cashier",
+      destinationLabel: entry.destination,
+      calledAt: entry.updatedAt,
+    }))
+    .sort((a, b) => b.calledAt - a.calledAt);
+  const windowCalls = activeCalls.filter((event) => event.destinationType === "window").slice(0, 2);
+  const cashierCalls = activeCalls.filter((event) => event.destinationType === "cashier").slice(0, 5);
 
   return (
     <Box
       sx={{
-        minHeight: "calc(100vh - 80px)",
-        bgcolor: ccviPalette.navy,
-        color: "white",
-        p: { xs: 2, md: 5 },
+        height: { xs: "auto", lg: "calc(100dvh - 92px)" },
+        minHeight: { xs: "calc(100dvh - 80px)", lg: 0 },
+        overflow: { xs: "visible", lg: "hidden" },
+        backgroundImage:
+          "linear-gradient(rgba(8, 20, 36, 0.62), rgba(8, 20, 36, 0.72)), url('/ccvi-login-background.png')",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundAttachment: { lg: "fixed" },
+        p: { xs: 2, sm: 3, lg: 4 },
       }}
     >
-      <Stack spacing={4}>
-        <Box textAlign="center">
-          <Typography variant="h2" sx={{ fontSize: { xs: "2.4rem", sm: "3.4rem", md: "4.5rem" } }}>
-            Ahora llamando
-          </Typography>
-          <Typography variant="h6" sx={{ opacity: 0.8 }}>
-            Mantenga siempre su mismo código de atención durante todo el proceso.
-          </Typography>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "repeat(2, minmax(0, 1fr))" },
+          gridTemplateRows: { xs: "auto", lg: "minmax(0, 31fr) minmax(0, 69fr)" },
+          gridTemplateAreas: {
+            xs: '"current" "recent" "window" "cashier"',
+            lg: '"current window" "recent cashier"',
+          },
+          gap: { xs: 2, lg: 3 },
+          maxWidth: 1440,
+          height: "100%",
+          mx: "auto",
+          minWidth: 0,
+          minHeight: 0,
+        }}
+      >
+        <Box sx={{ gridArea: "current", minWidth: 0, minHeight: 0 }}>
+          <DisplayPanel
+            title="Llamando ahora"
+            meta="EN PANTALLA"
+            icon={<Campaign />}
+            entries={currentCall ? [currentCall] : []}
+            current
+          />
         </Box>
-        <Grid container spacing={3} alignItems="stretch">
-          <Grid item xs={12} md={6}>
-            <DisplayPanel title="Ventanilla" entries={windowCalls} mode="window" />
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <DisplayPanel title="Caja" entries={cashierCalls} mode="cashier" />
-          </Grid>
-        </Grid>
-      </Stack>
+        <Box sx={{ gridArea: "recent", minWidth: 0, minHeight: 0 }}>
+          <DisplayPanel
+            title="Últimos llamados"
+            meta="Historial"
+            icon={<Monitor />}
+            entries={recentCalls}
+          />
+        </Box>
+        <Box sx={{ gridArea: "window", minWidth: 0, minHeight: 0 }}>
+          <DisplayPanel
+            title="Ventana"
+            meta="Atención"
+            icon={<BusinessCenter />}
+            entries={windowCalls}
+          />
+        </Box>
+        <Box sx={{ gridArea: "cashier", minWidth: 0, minHeight: 0 }}>
+          <DisplayPanel
+            title="Caja"
+            meta="Pagos"
+            icon={<Payments />}
+            entries={cashierCalls}
+          />
+        </Box>
+      </Box>
     </Box>
   );
 };
 
 const DisplayPanel = ({
   title,
+  meta,
+  icon,
   entries,
-  mode,
+  current = false,
 }: {
   title: string;
-  entries: PublicDisplayEntry[];
-  mode: "window" | "cashier";
+  meta: string;
+  icon: ReactNode;
+  entries: PublicDisplayCallEvent[];
+  current?: boolean;
 }) => (
   <Card
+    component="section"
+    aria-labelledby={`display-${title.toLowerCase().replace(/ /g, "-")}`}
     sx={{
-      border: `1px solid ${ccviPalette.border}`,
-      borderRadius: surfaceRadius,
-      bgcolor: "rgba(255,255,255,0.96)",
+      border: "1px solid #D1D5DB",
+      borderRadius: "16px",
+      bgcolor: "rgba(255,255,255,0.98)",
+      display: "flex",
+      flexDirection: "column",
       height: "100%",
-      minHeight: { md: 520 },
+      minHeight: 0,
       overflow: "hidden",
+      boxShadow: "0 14px 36px rgba(8, 20, 36, 0.24)",
     }}
   >
-    <CardContent sx={{ height: "100%" }}>
-      <Typography variant="h4" color="primary" sx={{ mb: 2 }}>
-        {title}
-      </Typography>
-      <Stack spacing={2} sx={{ height: "calc(100% - 56px)" }}>
-        {entries.length === 0 && <Typography color="text.secondary">Sin llamados activos.</Typography>}
+    <Box
+      sx={{
+        minHeight: 58,
+        px: { xs: 2, md: 2.5 },
+        py: 1.5,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 2,
+        borderBottom: "1px solid #D1D5DB",
+      }}
+    >
+      <Stack direction="row" spacing={1.25} alignItems="center">
+        <Box sx={{ color: ccviPalette.orange, display: "grid", placeItems: "center" }}>{icon}</Box>
+        <Typography
+          id={`display-${title.toLowerCase().replace(/ /g, "-")}`}
+          component="h2"
+          variant="h5"
+          sx={{ color: "#111C33", fontWeight: 700 }}
+        >
+          {title}
+        </Typography>
+      </Stack>
+      <Stack direction="row" spacing={1} alignItems="center">
+        {current && <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: ccviPalette.orange }} />}
+        <Typography variant="body2" sx={{ color: "#6B7280" }}>{meta}</Typography>
+      </Stack>
+    </Box>
+    <CardContent
+      sx={{
+        p: current ? { xs: 2, lg: 1.5 } : { xs: 1.25, lg: 1 },
+        bgcolor: current ? "#B4C3D7" : "#F3F4F6",
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+        overflow: "hidden",
+        "&:last-child": { pb: current ? { xs: 2, lg: 1.5 } : { xs: 1.25, lg: 1 } },
+      }}
+    >
+      <Stack spacing={current ? 0 : 1} sx={{ height: "100%", minHeight: 0 }}>
+        {entries.length === 0 && (
+          <Box sx={{ flex: 1, minHeight: current ? 112 : 52, display: "grid", placeItems: "center" }}>
+            <Typography color="text.secondary">
+              {current ? "En espera del próximo llamado" : "Aún no hay llamados registrados."}
+            </Typography>
+          </Box>
+        )}
         {entries.map((entry) => {
-          const tone = displayToneFor(entry, mode);
+          const accent = displayAccentFor(entry);
           return (
             <Box
-              key={`${entry.publicCode}-${entry.destination}`}
+              key={entry.eventId}
               sx={{
-                p: { xs: 2.25, md: 3 },
-                borderRadius: surfaceRadius,
-                bgcolor: tone.background,
-                color: tone.text,
-                border: `2px solid ${tone.border}`,
-                boxShadow: `0 12px 28px ${tone.shadow}`,
+                position: "relative",
+                overflow: "hidden",
+                bgcolor: "white",
+                border: current ? `1px solid ${accent}` : "1px solid #D1D5DB",
+                borderRadius: current ? "24px" : "14px",
+                boxShadow: current ? "0 8px 18px rgba(17, 28, 51, 0.16)" : "none",
+                pl: current ? { xs: 3, md: 5 } : { xs: 2.25, md: 3 },
+                pr: current ? { xs: 2.5, md: 4 } : { xs: 2, md: 2.5 },
+                pt: current ? { xs: 2.5, lg: 2 } : { xs: 1, lg: 0.25 },
+                pb: current ? { xs: 2.5, lg: 2 } : 1,
+                "&::before": {
+                  content: '""',
+                  position: "absolute",
+                  inset: "0 auto 0 0",
+                  width: current ? 12 : 7,
+                  bgcolor: accent,
+                },
               }}
             >
-              <Grid container spacing={2} alignItems="center">
-                <Grid item xs={12} sm={5}>
-                  <Typography variant="h6" sx={{ color: tone.muted, lineHeight: 1 }}>
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: { xs: "1fr", sm: "minmax(0, 1fr) 48px minmax(0, 1.25fr)" },
+                  alignItems: "center",
+                  gap: { xs: 1, sm: 2 },
+                }}
+              >
+                <Box>
+                  <Typography variant={current ? "subtitle1" : "caption"} sx={{ color: "#6B7280", fontWeight: 700 }}>
                     Usuario
                   </Typography>
                   <Typography
-                    variant="h2"
+                    variant={current ? "h2" : "h5"}
                     aria-label={getAccessiblePublicTicketLabel(
                       entry.publicCode,
                       entry.isPriority,
                     )}
-                    sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1 }}
+                    sx={{
+                      color: "#111C33",
+                      fontVariantNumeric: "tabular-nums",
+                      fontWeight: 800,
+                      lineHeight: 1.05,
+                      fontSize: current ? { xs: "2.4rem", md: "3.25rem" } : undefined,
+                    }}
                   >
                     {formatPublicTicketLabel(entry.publicCode, entry.isPriority)}
                   </Typography>
-                </Grid>
-                <Grid
-                  item
-                  xs={12}
-                  sm={1}
+                </Box>
+                <Box
                   sx={{
                     display: { xs: "none", sm: "grid" },
                     placeItems: "center",
-                    fontSize: "2rem",
-                    fontWeight: 900,
+                    width: current ? 46 : 38,
+                    height: current ? 46 : 38,
+                    borderRadius: "50%",
+                    bgcolor: "#F3F4F6",
+                    color: ccviPalette.orange,
                   }}
                   aria-hidden="true"
                 >
-                  ▶
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <Typography variant="h6" sx={{ color: tone.muted, lineHeight: 1 }}>
-                    Pase a
+                  <PlayArrow />
+                </Box>
+                <Box sx={{ textAlign: { xs: "left", sm: "right" }, minWidth: 0 }}>
+                  <Typography variant={current ? "subtitle1" : "caption"} sx={{ color: "#6B7280", fontWeight: 700 }}>
+                    Diríjase a
                   </Typography>
-                  <Typography variant="h3" sx={{ lineHeight: 1.05 }}>
-                    {entry.destination}
+                  <Typography
+                    variant={current ? "h2" : "h5"}
+                    sx={{
+                      color: "#111C33",
+                      fontWeight: current ? 800 : 700,
+                      lineHeight: 1.05,
+                      overflowWrap: "anywhere",
+                      fontSize: current ? { xs: "2rem", md: "3.25rem" } : undefined,
+                    }}
+                  >
+                    {monitorDestinationLabel(entry.destinationLabel)}
                   </Typography>
-                </Grid>
-              </Grid>
+                </Box>
+              </Box>
             </Box>
           );
         })}
@@ -4101,6 +4271,11 @@ const App = () => {
     const match = window.location.pathname.match(/^\/turno\/(.+)$/);
     return match?.[1] ?? null;
   }, []);
+  const publicSurfaceRole = useMemo<Role | null>(() => {
+    if (window.location.pathname === "/totem") return "kiosk";
+    if (window.location.pathname === "/monitor") return "display";
+    return null;
+  }, []);
   const requestedRole = useMemo(
     () => new URLSearchParams(window.location.search).get("role"),
     [],
@@ -4279,11 +4454,11 @@ const App = () => {
     );
   }
 
-  if (authenticatedProfile && !hasAuthorizedCenter) {
+  if (!publicSurfaceRole && authenticatedProfile && !hasAuthorizedCenter) {
     return <Page title="Centro no disponible"><Alert severity="warning">Su cuenta no tiene centros habilitados disponibles.</Alert></Page>;
   }
 
-  const effectiveRole: Role = authenticatedProfile?.role ?? role;
+  const effectiveRole: Role = publicSurfaceRole ?? authenticatedProfile?.role ?? role;
   const operationalData: AppData = (() => {
     if (!remoteOperationalDay) return data;
 

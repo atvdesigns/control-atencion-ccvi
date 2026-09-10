@@ -30,6 +30,7 @@ import type {
   CaseRecord,
   CenterConfig,
   PrivateUserRole,
+  PublicDisplayCallEvent,
   PublicDisplayEntry,
   PublicTurnStatus,
   ServiceType,
@@ -367,6 +368,51 @@ export const subscribeToPublicDisplay = (
   );
 };
 
+export const subscribeToPublicDisplayCalls = (
+  centerId: string,
+  dayId: string,
+  onSnapshot: (events: PublicDisplayCallEvent[]) => void,
+  onError: () => void,
+): Unsubscribe => {
+  if (!database) throw new Error("FIREBASE_DATABASE_UNAVAILABLE");
+
+  return onValue(
+    ref(database, `public/displayCalls/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}`),
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        onSnapshot([]);
+        return;
+      }
+
+      const events = Object.entries(snapshot.val() as Record<string, unknown>)
+        .flatMap(([eventId, value]) => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+          const event = value as Record<string, unknown>;
+          if (
+            typeof event.publicCode !== "string" ||
+            typeof event.isPriority !== "boolean" ||
+            (event.destinationType !== "window" && event.destinationType !== "cashier") ||
+            typeof event.destinationLabel !== "string" ||
+            typeof event.calledAt !== "number"
+          ) {
+            return [];
+          }
+          return [{
+            eventId,
+            publicCode: event.publicCode,
+            isPriority: event.isPriority,
+            destinationType: event.destinationType,
+            destinationLabel: event.destinationLabel,
+            calledAt: event.calledAt,
+          } satisfies PublicDisplayCallEvent];
+        })
+        .sort((a, b) => a.calledAt - b.calledAt || a.eventId.localeCompare(b.eventId));
+      onSnapshot(events);
+    },
+    onError,
+  );
+};
+
 export const subscribeToPublicKioskConfig = (
   centerId: string,
   onSnapshot: (config: PublicKioskConfig | null) => void,
@@ -566,6 +612,43 @@ export const publicDisplayEntryUpdate = (
   entry: PublicDisplayEntry | null,
 ) => ({
   [`public/displays/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}/${publicPathSegment(entryKey)}`]: entry,
+});
+
+export const toPublicDisplayCallEvent = (
+  caseItem: CaseRecord,
+  center: CenterConfig,
+  eventId: string,
+  destinationType: PublicDisplayCallEvent["destinationType"],
+  calledAt: number,
+): PublicDisplayCallEvent | null => {
+  const presentation = getPublicJourneyPresentation(
+    caseItem,
+    publicCashierDestination(caseItem, center),
+  );
+  if (!presentation.destination) return null;
+
+  return {
+    eventId,
+    publicCode: caseItem.publicCode,
+    isPriority: caseItem.isPriority,
+    destinationType,
+    destinationLabel: presentation.destination,
+    calledAt,
+  };
+};
+
+export const publicDisplayCallEventUpdate = (
+  centerId: string,
+  dayId: string,
+  event: PublicDisplayCallEvent,
+) => ({
+  [`public/displayCalls/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}/${publicPathSegment(event.eventId)}`]: {
+    publicCode: event.publicCode,
+    isPriority: event.isPriority,
+    destinationType: event.destinationType,
+    destinationLabel: event.destinationLabel,
+    calledAt: event.calledAt,
+  },
 });
 
 export const writePublicTurnStatus = (
