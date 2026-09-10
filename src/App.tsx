@@ -3625,6 +3625,15 @@ const PublicStatusView = ({ token }: { token: string }) => {
   const displayedPublicCode = turnStatus
     ? `${turnStatus.publicCode}${turnStatus.isPriority ? " P" : ""}`
     : "";
+  const publicStep = statusDetails?.step;
+  const showPublicDestination = Boolean(
+    turnStatus?.destination &&
+    !turnStatus.status.startsWith("Diríjase a ") &&
+    turnStatus.status !== "Atención en ventanilla" &&
+    turnStatus.status !== "Atención en caja",
+  );
+  const showPublicRequirements = publicStep === 0 || publicStep === 1;
+  const showPublicPaymentMethods = publicStep === 3 || publicStep === 4;
 
   return (
     <CenteredShell>
@@ -3659,7 +3668,7 @@ const PublicStatusView = ({ token }: { token: string }) => {
                 <Typography variant="h5" color={isCompletedStatus ? "success.main" : "text.primary"}>
                   {isCompletedStatus ? "Proceso finalizado con éxito" : turnStatus.status}
                 </Typography>
-                {!isCompletedStatus && turnStatus.destination && (
+                {!isCompletedStatus && showPublicDestination && turnStatus.destination && (
                   <Typography color="text.secondary" fontWeight={700}>
                     {turnStatus.destination}
                   </Typography>
@@ -3692,20 +3701,13 @@ const PublicStatusView = ({ token }: { token: string }) => {
                 )}
               </Paper>
 
-              {!isCompletedStatus && (
-                <>
-                  <Divider />
-                  {statusDetails?.step !== null && statusDetails?.step !== undefined && (
-                    <PublicJourneyStepper activeStep={statusDetails.step} />
-                  )}
-
-                  <PublicJourneyInformation
-                    requirements={requirements}
-                    paymentMethods={paymentMethods}
-                    showRequirements={requirements.length > 0}
-                    showPaymentMethods={paymentMethods.length > 0}
-                  />
-                </>
+              {!isCompletedStatus && (showPublicRequirements || showPublicPaymentMethods) && (
+                <PublicJourneyInformation
+                  requirements={requirements}
+                  paymentMethods={paymentMethods}
+                  showRequirements={showPublicRequirements && requirements.length > 0}
+                  showPaymentMethods={showPublicPaymentMethods && paymentMethods.length > 0}
+                />
               )}
 
               <Alert severity="info">
