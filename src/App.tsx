@@ -3807,6 +3807,13 @@ const App = () => {
     );
   }, [authenticatedProfile, hasAuthorizedCenter, selectedCenterId, selectedDayId]);
 
+  useEffect(() => {
+    if (authSession.status !== "authenticated" || !privateAccessRequested) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("role");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [authSession.status, privateAccessRequested]);
+
   if (publicToken) {
     return <PublicStatusView token={publicToken} />;
   }
@@ -3853,7 +3860,7 @@ const App = () => {
   }
 
   const effectiveRole: Role = authenticatedProfile?.role ?? role;
-  const operationalData = useMemo<AppData>(() => {
+  const operationalData: AppData = (() => {
     if (!remoteOperationalDay) return data;
 
     const currentSession = getCurrentSession(data);
@@ -3887,7 +3894,7 @@ const App = () => {
       paymentQueue: remotePaymentQueue,
       events: remoteEvents,
     };
-  }, [data, remoteOperationalDay]);
+  })();
   const privateData = authenticatedProfile
     ? {
         ...operationalData,
