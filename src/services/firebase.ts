@@ -277,11 +277,14 @@ export const subscribeToPublicTurnStatus = (
       const value = snapshot.val() as Partial<PublicTurnStatus> | null;
       if (
         !value ||
+        typeof value.centerId !== "string" ||
         typeof value.publicCode !== "string" ||
         typeof value.status !== "string" ||
         !["representation", "vehicle_owner"].includes(value.serviceType ?? "") ||
         typeof value.serviceLabel !== "string" ||
-        (value.destination !== null && typeof value.destination !== "string") ||
+        (value.destination !== undefined &&
+          value.destination !== null &&
+          typeof value.destination !== "string") ||
         typeof value.updatedAt !== "number" ||
         !Array.isArray(value.requirements) ||
         !value.requirements.every((item) => typeof item === "string") ||
@@ -298,11 +301,12 @@ export const subscribeToPublicTurnStatus = (
       }
 
       onSnapshot({
+        centerId: value.centerId,
         publicCode: value.publicCode,
         status: value.status,
         serviceType: value.serviceType as PublicTurnStatus["serviceType"],
         serviceLabel: value.serviceLabel,
-        destination: value.destination,
+        destination: value.destination ?? null,
         updatedAt: value.updatedAt,
         requirements: [...value.requirements],
         paymentMethods: value.paymentMethods.map((item) => ({
@@ -499,6 +503,7 @@ export const toPublicTurnStatus = (
   );
 
   return {
+    centerId: caseItem.centerId,
     publicCode: caseItem.publicCode,
     status: presentation.title,
     serviceType: caseItem.serviceType,
