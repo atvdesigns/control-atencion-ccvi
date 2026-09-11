@@ -150,6 +150,19 @@ export const formatPublicCode = (windowNumber: number, sequence: number): string
   return `V${windowNumber}-${String(sequence).padStart(2, "0")}`;
 };
 
+export const normalizeChileanPhone = (phone: string): string | undefined => {
+  const compactPhone = phone.replace(/\s/g, "");
+  if (!compactPhone) return undefined;
+
+  const nationalNumber = compactPhone.startsWith("+56")
+    ? compactPhone.slice(3)
+    : compactPhone;
+  if (!/^[2-79]\d{8}$/.test(nationalNumber)) return undefined;
+  if (!compactPhone.startsWith("+56") && !/^\d{9}$/.test(compactPhone)) return undefined;
+
+  return `+56${nationalNumber}`;
+};
+
 export const getAccessiblePublicCode = (publicCode: string) => {
   const match = /^V(\d+)-(\d+)$/.exec(publicCode);
   if (!match) return `Turno ${publicCode}`;
@@ -1946,7 +1959,15 @@ export const finishDocumentValidation = (
 
   if (status === "incomplete" || status === "rejected") {
     const rejectedCustomerName = rejectedContact?.customerName?.trim() || undefined;
-    const rejectedCustomerPhone = rejectedContact?.customerPhone?.trim() || undefined;
+    const rejectedCustomerPhoneInput = rejectedContact?.customerPhone?.trim() ?? "";
+    const rejectedCustomerPhone = normalizeChileanPhone(rejectedCustomerPhoneInput);
+    if (status === "rejected" && rejectedCustomerPhoneInput && !rejectedCustomerPhone) {
+      throw new Error("INVALID_CHILEAN_PHONE");
+    }
+    const rejectedContactFields = {
+      ...(rejectedCustomerName ? { rejectedCustomerName } : {}),
+      ...(rejectedCustomerPhone ? { rejectedCustomerPhone } : {}),
+    };
 
     return transitionCase(
       base,
@@ -1955,9 +1976,7 @@ export const finishDocumentValidation = (
         currentState: status === "incomplete" ? "documentation_incomplete" : "rejected",
         documentStatus: status,
         documentValidationCompletedAt: now,
-        ...(status === "rejected"
-          ? { rejectedCustomerName, rejectedCustomerPhone }
-          : {}),
+        ...(status === "rejected" ? rejectedContactFields : {}),
       },
       status === "incomplete" ? "documentation_incomplete" : "case_rejected",
       role,
@@ -2055,7 +2074,15 @@ export const finishDocumentValidationRealtime = async (
       : [`${now}-${transactionNonce()}`];
   const queueItemId = `${center.shortCode}-PAY-${transactionNonce()}`;
   const rejectedCustomerName = rejectedContact?.customerName?.trim() || undefined;
-  const rejectedCustomerPhone = rejectedContact?.customerPhone?.trim() || undefined;
+  const rejectedCustomerPhoneInput = rejectedContact?.customerPhone?.trim() ?? "";
+  const rejectedCustomerPhone = normalizeChileanPhone(rejectedCustomerPhoneInput);
+  if (status === "rejected" && rejectedCustomerPhoneInput && !rejectedCustomerPhone) {
+    throw new Error("INVALID_CHILEAN_PHONE");
+  }
+  const rejectedContactFields = {
+    ...(rejectedCustomerName ? { rejectedCustomerName } : {}),
+    ...(rejectedCustomerPhone ? { rejectedCustomerPhone } : {}),
+  };
   const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
 
   const result = await runTransaction(
@@ -2085,9 +2112,7 @@ export const finishDocumentValidationRealtime = async (
           currentState: nextState,
           documentStatus: status,
           documentValidationCompletedAt: now,
-          ...(status === "rejected"
-            ? { rejectedCustomerName, rejectedCustomerPhone }
-            : {}),
+          ...(status === "rejected" ? rejectedContactFields : {}),
           updatedAt: now,
         };
         const completionEvent: TraceEvent = {

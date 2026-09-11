@@ -1,4 +1,5 @@
 import {
+  Accessible,
   AccountBalance,
   AddBusiness,
   AssignmentTurnedIn,
@@ -100,6 +101,7 @@ import {
   markWindowNoShowRealtime,
   markCaseAsPriorityRealtime,
   createPriorityArrivalRealtime,
+  normalizeChileanPhone,
   removeCasePriorityRealtime,
   markNoShowRealtime,
   pausePaymentRealtime,
@@ -891,6 +893,7 @@ const CaseCard = ({
   compact = false,
   processed = false,
   showPriorityLabel = false,
+  operatorStyle = false,
 }: {
   caseItem: CaseRecord;
   center: CenterConfig;
@@ -899,6 +902,7 @@ const CaseCard = ({
   compact?: boolean;
   processed?: boolean;
   showPriorityLabel?: boolean;
+  operatorStyle?: boolean;
 }) => {
   const statusColor = statusColors[caseItem.currentState] ?? ccviPalette.warmGray;
   const cashierLabel = caseItem.cashierId?.replace("cashier", "Caja ");
@@ -908,28 +912,66 @@ const CaseCard = ({
     <Card
       sx={{
         borderLeft: `${prominent ? 12 : 8}px solid ${statusColor}`,
-        borderRadius: surfaceRadius,
-        height: "100%",
+        border: operatorStyle ? `1px solid ${ccviPalette.border}` : undefined,
+        borderLeftWidth: prominent ? 12 : 8,
+        borderLeftColor: statusColor,
+        borderLeftStyle: "solid",
+        borderRadius: operatorStyle ? "20px" : surfaceRadius,
+        width: operatorStyle && !prominent ? "100%" : undefined,
+        height: operatorStyle && !prominent ? { xs: "auto", sm: 90 } : "100%",
+        minHeight: operatorStyle && !prominent ? { xs: 90, sm: 90 } : undefined,
         bgcolor: prominent ? "rgba(255,255,255,0.98)" : "background.paper",
-        boxShadow: prominent ? "0 18px 44px rgba(17, 27, 50, 0.14)" : undefined,
+        boxShadow: prominent
+          ? "0 14px 32px rgba(17, 28, 51, 0.14)"
+          : operatorStyle
+            ? "0 4px 14px rgba(17, 28, 51, 0.08)"
+            : undefined,
         overflow: "hidden",
       }}
     >
-      <CardContent sx={compact ? { p: { xs: 2, md: 2 }, "&:last-child": { pb: { xs: 2, md: 2 } } } : undefined}>
-        <Stack spacing={compact ? 1.25 : prominent ? 2 : 1.5}>
+      <CardContent
+        sx={
+          compact || operatorStyle
+            ? {
+                ...(operatorStyle && !prominent
+                  ? {
+                      pt: 2,
+                      pr: 2,
+                      pb: 1,
+                      pl: 2,
+                      "&:last-child": { pb: 1 },
+                    }
+                  : {
+                      p: { xs: 2, md: prominent ? 2.5 : 2 },
+                      "&:last-child": { pb: { xs: 2, md: prominent ? 2.5 : 2 } },
+                    }),
+                height: "100%",
+                boxSizing: "border-box",
+              }
+            : undefined
+        }
+      >
+        <Stack spacing={compact ? 1.25 : prominent ? 2 : 1.5} sx={{ height: "100%" }}>
           <Stack
             direction={{ xs: "column", sm: "row" }}
             alignItems={{ xs: "flex-start", sm: "flex-start" }}
             justifyContent="space-between"
-            gap={1.25}
+            gap={operatorStyle ? 1 : 1.25}
+            sx={{ minWidth: 0, flex: operatorStyle && !prominent ? 1 : undefined }}
           >
-            <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+            <Stack
+              spacing={0.25}
+              sx={{
+                minWidth: 0,
+                flexShrink: operatorStyle ? 0 : 1,
+              }}
+            >
               <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{ fontWeight: 750, lineHeight: 1, letterSpacing: "0.02em" }}
               >
-                Usuario
+                {operatorStyle && prominent ? "Usuario de turno" : "Usuario"}
               </Typography>
               <Typography
                 variant={codeVariant}
@@ -938,7 +980,21 @@ const CaseCard = ({
                     ? getAccessiblePublicTicketLabel(caseItem.publicCode, caseItem.isPriority)
                     : getAccessiblePublicCode(caseItem.publicCode)
                 }
-                sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 0.95 }}
+                sx={{
+                  fontVariantNumeric: "tabular-nums",
+                  lineHeight: 1,
+                  whiteSpace: "nowrap",
+                  wordBreak: "keep-all",
+                  overflowWrap: "normal",
+                  ...(operatorStyle
+                    ? {
+                        fontSize: prominent
+                          ? { xs: "2.4rem", sm: "3rem" }
+                          : { xs: "2rem", sm: "2.25rem" },
+                        fontWeight: 800,
+                      }
+                    : {}),
+                }}
               >
                 {showPriorityLabel
                   ? formatPublicTicketLabel(caseItem.publicCode, caseItem.isPriority)
@@ -946,33 +1002,63 @@ const CaseCard = ({
               </Typography>
             </Stack>
             <Stack
-              direction="row"
               spacing={0.75}
-              useFlexGap
-              justifyContent={{ xs: "flex-start", sm: "flex-end" }}
+              alignItems={{ xs: "flex-start", sm: "flex-end" }}
               sx={{
-                flexWrap: "wrap",
-                maxWidth: { sm: "68%" },
-                "@media (min-width:680px)": {
-                  flexWrap: "nowrap",
-                },
+                maxWidth: { sm: operatorStyle ? "72%" : "68%" },
+                minWidth: 0,
+                flex: { sm: "1 1 auto" },
+                alignSelf: { xs: "stretch", sm: "flex-start" },
+                mt: operatorStyle && prominent ? { sm: -1 } : undefined,
+                mr: operatorStyle && prominent ? { sm: -1 } : undefined,
                 "& .MuiChip-root": {
                   flexShrink: 0,
                 },
               }}
             >
-              <Chip label={stateLabels[caseItem.currentState]} size="small" />
-              {cashierLabel && <Chip icon={<Payments />} label={cashierLabel} size="small" />}
-              <Chip
-                icon={<Badge />}
-                label={`Llegada ${formatTime(caseItem.arrivalAt)}`}
-                variant="outlined"
-                size="small"
-              />
+              <Stack
+                direction="row"
+                spacing={0.75}
+                useFlexGap
+                flexWrap="wrap"
+                justifyContent={{ xs: "flex-start", sm: "flex-end" }}
+                sx={
+                  operatorStyle
+                    ? undefined
+                    : {
+                        "@media (min-width:680px)": {
+                          flexWrap: "nowrap",
+                        },
+                      }
+                }
+              >
+                <Chip label={stateLabels[caseItem.currentState]} size="small" />
+                {cashierLabel && <Chip icon={<Payments />} label={cashierLabel} size="small" />}
+                <Chip
+                  icon={<Badge />}
+                  label={`Llegada ${formatTime(caseItem.arrivalAt)}`}
+                  variant="outlined"
+                  size="small"
+                />
+              </Stack>
+              {operatorStyle && caseItem.folderCode && (
+                <Chip
+                  icon={<Description />}
+                  label={`Carpeta ${caseItem.folderCode}`}
+                  color="primary"
+                  size="small"
+                />
+              )}
             </Stack>
           </Stack>
-          {caseItem.folderCode && (
-            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+          {!operatorStyle && caseItem.folderCode && (
+            <Stack
+              direction="row"
+              spacing={1}
+              useFlexGap
+              flexWrap="wrap"
+              justifyContent={operatorStyle ? { xs: "flex-start", sm: "flex-end" } : "flex-start"}
+            >
               <Chip icon={<Description />} label={`Carpeta ${caseItem.folderCode}`} color="primary" size="small" />
             </Stack>
           )}
@@ -1593,6 +1679,7 @@ const OperatorView = ({
   const [rejectionDialogCase, setRejectionDialogCase] = useState<CaseRecord | null>(null);
   const [rejectedCustomerName, setRejectedCustomerName] = useState("");
   const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
+  const rejectedPhoneIsInvalid = Boolean(rejectedCustomerPhone) && !normalizeChileanPhone(rejectedCustomerPhone);
   const closePriorityDialog = () => {
     setPriorityDialogCase(null);
     setPriorityCreationOpen(false);
@@ -1632,40 +1719,117 @@ const OperatorView = ({
     )
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 6);
+  const operatorAlertLines = activeCase
+    ? [
+        ...(activeCase.currentState === "in_document_validation"
+          ? [
+              activeCase.validationLevel === "enhanced"
+                ? "Verifique la documentación requerida para este proceso antes de aprobar."
+                : "Verifique la documentación antes de aprobar.",
+            ]
+          : []),
+        `Debe finalizar ${activeCase.publicCode} antes de llamar otro cliente.`,
+        ...(activeCase.currentState === "called_to_window"
+          ? ["Espere a que la persona se presente para iniciar la validación."]
+          : []),
+        ...(activeCase.currentState === "in_document_validation" && otherWindows.length > 0
+          ? ["Use Reasignar solo si la persona corresponde a otra ventanilla."]
+          : []),
+      ]
+    : [
+        waitingCases.length > 0
+          ? "Presione Siguiente turno para llamar a la primera persona según el orden de llegada."
+          : "No hay personas en espera. Los nuevos turnos aparecerán en En espera de atención.",
+      ];
+  const operatorSectionSx = {
+    border: `1px solid ${ccviPalette.border}`,
+    borderRadius: "16px",
+    bgcolor: "rgba(255, 255, 255, 0.98)",
+    boxShadow: "0 10px 28px rgba(17, 28, 51, 0.10)",
+    overflow: "hidden",
+  };
+  const operatorAccordionSx = {
+    ...operatorSectionSx,
+    "&.MuiPaper-root": { borderRadius: "16px" },
+    "&:before": { display: "none" },
+    "&.Mui-expanded": { m: 0, borderRadius: "16px" },
+  };
+  const operatorAccordionDetailsSx = {
+    p: { xs: 1.5, sm: 2, md: 2.5 },
+    bgcolor: "rgba(243, 244, 246, 0.96)",
+    maxHeight: { xs: "52vh", md: 520 },
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+    scrollbarGutter: "stable",
+  };
+  const operatorActionSx = {
+    minHeight: 56,
+    borderRadius: "12px",
+    px: { xs: 2, sm: 3 },
+    fontSize: "1rem",
+    fontWeight: 700,
+  };
 
   return (
-    <Page
-      title={`${operatorWindow.name} · ${operatorWindow.serviceLabel}`}
-      description="Recuerda que debes esperar a que el usuario se presente, validar la documentación presentada, asignar una carpeta física, escribir el número de atención en la carpeta e informar al usuario que será derivado a caja."
+    <Box
+      sx={{
+        minHeight: "calc(100vh - 80px)",
+        backgroundImage:
+          "linear-gradient(rgba(249, 250, 251, 0.92), rgba(249, 250, 251, 0.96)), url('/ccvi-login-background.png')",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundAttachment: { md: "fixed" },
+      }}
     >
-      <Stack spacing={{ xs: 3, md: 4 }} useFlexGap>
-        <Grid2 container spacing={3} alignItems="stretch">
+      <Page
+        title={`${operatorWindow.name} · ${operatorWindow.serviceLabel}`}
+        description="Recuerda que debes esperar a que el usuario se presente, validar la documentación presentada, asignar una carpeta física, escribir el número de atención en la carpeta e informar al usuario que será derivado a caja."
+      >
+      <Stack spacing={{ xs: 2, md: 3 }} useFlexGap>
+        <Grid2 container spacing={{ xs: 2, md: 2 }} alignItems="stretch">
           <Grid2 size={{ xs: 12, md: 6 }}>
               <Card
                 sx={{
-                  bgcolor: ccviPalette.navy,
+                  bgcolor: "#111C33",
                   color: "white",
-                  borderRadius: surfaceRadius,
+                  borderRadius: "16px",
+                  height: "100%",
+                  boxShadow: "0 12px 30px rgba(17, 28, 51, 0.18)",
                   overflow: "hidden",
                 }}
               >
                 <Box
                   sx={{
-                    px: { xs: 2, sm: 3 },
-                    py: 2,
+                    px: { xs: 2, sm: 2.5 },
+                    py: 1.75,
                     borderBottom: "1px solid rgba(255, 255, 255, 0.16)",
                   }}
                 >
-                  <Typography variant="h5">Próxima atención documental</Typography>
+                  <Stack direction="row" alignItems="center" spacing={1.5}>
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: "50%",
+                        display: "grid",
+                        placeItems: "center",
+                        bgcolor: "rgba(98, 126, 182, 0.28)",
+                        color: "#DCE7F7",
+                      }}
+                    >
+                      <BusinessCenter fontSize="small" />
+                    </Box>
+                    <Typography variant="h5">Próxima atención documental</Typography>
+                  </Stack>
                 </Box>
                 <CardContent
                   sx={{
-                    p: { xs: 2, sm: 3 },
-                    "&:last-child": { pb: { xs: 2, sm: 3 } },
+                    p: { xs: 2, sm: 2.5 },
+                    "&:last-child": { pb: { xs: 2, sm: 2.5 } },
                   }}
                 >
                   <Stack spacing={2}>
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                       <Button
                   variant="contained"
                   color="secondary"
@@ -1679,12 +1843,13 @@ const OperatorView = ({
                     setData(() => next);
                   }}
                   disabled={Boolean(activeCase) || waitingCases.length === 0}
-                        sx={{ width: "100%", flex: 1, minHeight: 48 }}
+                        sx={{ ...operatorActionSx, width: "100%", flex: 1 }}
                       >
                         Siguiente turno
                       </Button>
             <Button
               variant="contained"
+              endIcon={<Accessible />}
               onClick={() => {
                 setPriorityDialogCase(null);
                 setCreatedPriorityCase(null);
@@ -1694,24 +1859,54 @@ const OperatorView = ({
               sx={{
                           width: "100%",
                           flex: 1,
-                          minHeight: 48,
+                          ...operatorActionSx,
                           bgcolor: "info.main",
                           "&:hover": { bgcolor: "info.dark" },
+                          "& .MuiButton-endIcon": {
+                            width: 32,
+                            height: 32,
+                            ml: 1,
+                            mr: 0,
+                            borderRadius: "50%",
+                            bgcolor: "common.white",
+                            color: "info.main",
+                            display: "grid",
+                            placeItems: "center",
+                          },
+                          "& .MuiButton-endIcon > svg": { fontSize: 22 },
                         }}
                       >
                   Turno Preferencial
                 </Button>
               </Stack>
-              {activeCase && (
-                <Alert severity="warning">
-                  Debe finalizar {activeCase.publicCode} antes de llamar otro cliente.
-                </Alert>
-              )}
-              {!activeCase && waitingCases.length === 0 && (
-                <Alert severity="info">
-                  No hay usuarios en espera para llamar en esta ventanilla. Cuando se genere un nuevo turno en el tótem, aparecerá en la cola "En espera de atención".
-                </Alert>
-              )}
+              <Alert
+                severity="info"
+                sx={{
+                  borderRadius: "8px",
+                  py: 0.25,
+                  alignItems: "center",
+                  "& .MuiAlert-message": { width: "100%" },
+                }}
+              >
+                {operatorAlertLines.length === 1 ? (
+                  <Typography variant="body2" fontWeight={600}>
+                    {operatorAlertLines[0]}
+                  </Typography>
+                ) : (
+                  <Box component="ul" sx={{ m: 0, pl: 2.25 }}>
+                    {operatorAlertLines.map((line, index) => (
+                      <Typography
+                        component="li"
+                        variant="body2"
+                        fontWeight={index === 0 ? 700 : 500}
+                        key={line}
+                      >
+                        {line}
+                      </Typography>
+                    ))}
+                  </Box>
+                )}
+              </Alert>
             </Stack>
           </CardContent>
         </Card>
@@ -1719,39 +1914,44 @@ const OperatorView = ({
           </Grid2>
 
           <Grid2 size={{ xs: 12, md: 6 }}>
-        <Paper variant="outlined" sx={{ ...sectionContainerSx, p: 0 }}>
-          <Box sx={sectionHeaderSx}>
+        <Paper
+          variant="outlined"
+          sx={{ ...operatorSectionSx, p: 0, height: "100%", display: "flex", flexDirection: "column" }}
+        >
+          <Box sx={{ ...sectionHeaderSx, px: { xs: 2, sm: 2.5 }, py: 1.75 }}>
             <Stack direction="row" alignItems="center" spacing={1.25}>
-              <Box sx={{ color: ccviPalette.orange, display: "grid", placeItems: "center", flexShrink: 0 }}>
+              <Box
+                sx={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: "50%",
+                  bgcolor: "rgba(232, 117, 26, 0.12)",
+                  color: ccviPalette.orange,
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
                 <Campaign />
               </Box>
               <Typography variant="h5">Atención actual</Typography>
               <CountBadge count={activeCase ? 1 : 0} label="usuarios llamados" />
             </Stack>
           </Box>
-          <Box sx={sectionBodySx}>
+          <Box sx={{ ...sectionBodySx, flex: 1, display: "flex", flexDirection: "column" }}>
             {!activeCase && (
-              <Stack spacing={1.25}>
+              <Stack spacing={1.25} justifyContent="center" sx={{ flex: 1, minHeight: { md: 150 } }}>
                 <Typography variant="h6" color="primary">
                   Sin usuario llamado
                 </Typography>
                 <Typography color="text.secondary">
                   Esta sección mostrará el turno que debe presentarse en ventanilla o que está en revisión documental.
                 </Typography>
-                <Alert severity={waitingCases.length > 0 ? "info" : "warning"}>
-                  {waitingCases.length > 0
-                    ? "Presione “Llamar siguiente turno” para llamar al primer usuario según el orden de llegada."
-                    : "No hay usuarios disponibles para llamar. Cuando se genere un nuevo turno en el tótem, aparecerá en “En espera de atención”."}
-                </Alert>
               </Stack>
             )}
             {activeCase && (
-              <CaseCard caseItem={activeCase} center={center} prominent showPriorityLabel>
+              <CaseCard caseItem={activeCase} center={center} prominent showPriorityLabel operatorStyle>
             {activeCase.currentState === "called_to_window" && (
-                  <Stack spacing={1.5}>
-                    <Alert severity="info">
-                      Este turno ya fue llamado. Espere a que la persona se presente para iniciar la revisión.
-                    </Alert>
                 <Stack
                   direction={{ xs: "column", sm: "row" }}
                   spacing={1}
@@ -1760,6 +1960,7 @@ const OperatorView = ({
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                     <Button
                       variant="contained"
+                      sx={operatorActionSx}
                       onClick={async () => {
                         const next = await startValidationRealtime(
                           data,
@@ -1774,6 +1975,7 @@ const OperatorView = ({
                     <Button
                       variant="outlined"
                       color="warning"
+                      sx={operatorActionSx}
                       onClick={async () => {
                         const next = await markWindowNoShowRealtime(
                           data,
@@ -1789,25 +1991,18 @@ const OperatorView = ({
                   {activeCase.isPriority && activeCase.priorityType ? (
                     <Button
                       variant="text"
-                      sx={{ minHeight: 44, ml: { sm: "auto" } }}
+                      sx={{ minHeight: 56, ml: { sm: "auto" }, px: 2 }}
                       onClick={() => {
                         setPriorityDialogCase(activeCase);
                         setSelectedPriorityType(activeCase.priorityType ?? "");
                       }}
                     >
-                      Gestionar preferencial
+                      Gestionar
                     </Button>
                   ) : null}
                 </Stack>
-                  </Stack>
                 )}
                 {activeCase.currentState === "in_document_validation" && (
-                  <Stack spacing={1.5}>
-                    {activeCase.validationLevel === "enhanced" && (
-                      <Alert severity="warning">
-                        Verifique la documentación requerida para representación, empresa o poder notarial antes de aprobar.
-                      </Alert>
-                    )}
                     <Stack
                       direction={{ xs: "column", sm: "row" }}
                       spacing={1}
@@ -1815,14 +2010,16 @@ const OperatorView = ({
                       useFlexGap
                       sx={{
                         "& > .MuiButton-root": {
-                          minHeight: 44,
+                          minHeight: 56,
+                          borderRadius: "12px",
+                          px: 2.5,
+                          whiteSpace: "nowrap",
                           width: { xs: "100%", sm: "auto" },
                         },
                       }}
                     >
                       <Button
                         variant="contained"
-                        color="success"
                         onClick={async () => {
                           const next = await finishDocumentValidationRealtime(
                             data,
@@ -1887,25 +2084,7 @@ const OperatorView = ({
                           Reasignar
                         </Button>
                       ))}
-                                {activeCase.isPriority && activeCase.priorityType ? (
-              <Button
-                variant="text"
-                sx={{ minHeight: 44 }}
-                onClick={() => {
-                  setPriorityDialogCase(activeCase);
-                  setSelectedPriorityType(activeCase.priorityType ?? "");
-                }}
-              >
-                Gestionar preferencial
-              </Button>
-            ) : null}
-</Stack>
-                    {otherWindows.length > 0 && (
-                      <Typography variant="body2" color="text.secondary">
-                        Use la reasignación solo si el usuario corresponde a otra ventanilla. El turno conserva su código y hora de llegada.
-                      </Typography>
-                    )}
-                  </Stack>
+                    </Stack>
                 )}
               </CaseCard>
             )}
@@ -1914,22 +2093,33 @@ const OperatorView = ({
           </Grid2>
         </Grid2>
 
-        <Accordion defaultExpanded disableGutters sx={accordionSectionSx}>
+        <Accordion defaultExpanded disableGutters sx={operatorAccordionSx}>
           <AccordionSummary
             expandIcon={<ExpandMore />}
             aria-label={`En espera de atención, ${waitingCases.length} usuarios`}
-            sx={accordionSummarySx}
+            sx={{ ...accordionSummarySx, px: { xs: 2, md: 2.5 }, py: 1.25 }}
           >
             <Stack direction="row" alignItems="center" spacing={1.25}>
-              <Box sx={{ color: ccviPalette.orange, display: "grid", placeItems: "center", flexShrink: 0 }}>
+              <Box
+                sx={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: "50%",
+                  bgcolor: ccviPalette.orange,
+                  color: "white",
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
                 <HowToReg />
               </Box>
               <Typography variant="h5">En espera de atención</Typography>
               <CountBadge count={waitingCases.length} label="usuarios en espera" />
             </Stack>
           </AccordionSummary>
-          <AccordionDetails sx={scrollableAccordionDetailsSx}>
-            <Grid2 container spacing={3}>
+          <AccordionDetails sx={operatorAccordionDetailsSx}>
+            <Grid2 container spacing={1.5}>
               {waitingCases.length === 0 && (
                 <Grid2 size={{ xs: 12 }}>
                   <EmptyState text="No hay usuarios esperando atención en esta ventanilla." />
@@ -1937,29 +2127,40 @@ const OperatorView = ({
               )}
               {waitingCases.map((caseItem) => (
                 <Grid2 size={{ xs: 12 }} key={caseItem.caseId}>
-                  <CaseCard caseItem={caseItem} center={center} showPriorityLabel />
+                  <CaseCard caseItem={caseItem} center={center} showPriorityLabel operatorStyle />
                 </Grid2>
               ))}
             </Grid2>
           </AccordionDetails>
         </Accordion>
 
-        <Accordion defaultExpanded disableGutters sx={accordionSectionSx}>
+        <Accordion defaultExpanded disableGutters sx={operatorAccordionSx}>
           <AccordionSummary
             expandIcon={<ExpandMore />}
             aria-label={`Procesados recientemente, ${processed.length} casos`}
-            sx={accordionSummarySx}
+            sx={{ ...accordionSummarySx, px: { xs: 2, md: 2.5 }, py: 1.25 }}
           >
             <Stack direction="row" alignItems="center" spacing={1.25}>
-              <Box sx={{ color: ccviPalette.orange, display: "grid", placeItems: "center", flexShrink: 0 }}>
+              <Box
+                sx={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: "50%",
+                  bgcolor: ccviPalette.orange,
+                  color: "white",
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
                 <AssignmentTurnedIn />
               </Box>
               <Typography variant="h5">Procesados recientemente</Typography>
               <CountBadge count={processed.length} label="casos procesados recientemente" />
             </Stack>
           </AccordionSummary>
-          <AccordionDetails sx={scrollableAccordionDetailsSx}>
-            <Grid2 container spacing={3}>
+          <AccordionDetails sx={operatorAccordionDetailsSx}>
+            <Grid2 container spacing={1.5}>
               {processed.length === 0 && (
                 <Grid2 size={{ xs: 12 }}>
                   <EmptyState text="Aún no hay casos procesados por esta ventanilla." />
@@ -1967,7 +2168,7 @@ const OperatorView = ({
               )}
               {processed.map((caseItem) => (
                 <Grid2 size={{ xs: 12, md: 6 }} key={caseItem.caseId}>
-                  <CaseCard caseItem={caseItem} center={center} processed showPriorityLabel />
+                  <CaseCard caseItem={caseItem} center={center} processed showPriorityLabel operatorStyle />
                 </Grid2>
               ))}
             </Grid2>
@@ -1979,9 +2180,52 @@ const OperatorView = ({
         onClose={createdPriorityCase ? undefined : closePriorityDialog}
         fullWidth
         maxWidth="sm"
+        slotProps={{
+          backdrop: {
+            sx: createdPriorityCase
+              ? { bgcolor: "rgba(17, 28, 51, 0.78)" }
+              : undefined,
+          },
+          paper: {
+            sx: createdPriorityCase
+              ? {
+                  position: "relative",
+                  width: "min(600px, calc(100% - 32px))",
+                  maxHeight: "calc(100dvh - 32px)",
+                  m: 2,
+                  borderRadius: "24px",
+                  overflowY: "auto",
+                  boxShadow: "0 16px 32px rgba(0,0,0,0.25), 0 4px 8px rgba(0,0,0,0.10)",
+                }
+              : undefined,
+          },
+        }}
       >
-        <DialogTitle sx={{ px: { xs: 2.5, sm: 3 }, pt: { xs: 2.5, sm: 3 }, pb: 1.5 }}>
-          <Typography variant="h5" component="span" fontWeight={700}>
+        <DialogTitle
+          sx={
+            createdPriorityCase
+              ? { p: 0, display: "flex", justifyContent: "center" }
+              : { px: { xs: 2.5, sm: 3 }, pt: { xs: 2.5, sm: 3 }, pb: 1.5 }
+          }
+        >
+          <Typography
+            variant={createdPriorityCase ? "caption" : "h5"}
+            component="span"
+            fontWeight={700}
+            sx={
+              createdPriorityCase
+                ? {
+                    px: 2,
+                    py: 1.25,
+                    bgcolor: ccviPalette.navy,
+                    color: "common.white",
+                    borderRadius: "0 0 12px 12px",
+                    textAlign: "center",
+                    lineHeight: 1.4,
+                  }
+                : undefined
+            }
+          >
           {createdPriorityCase
             ? "Turno preferencial creado"
             : priorityCreationOpen
@@ -1991,28 +2235,68 @@ const OperatorView = ({
               : "Crear atención preferencial"}
           </Typography>
         </DialogTitle>
-        <DialogContent>
+        <DialogContent
+          sx={
+            createdPriorityCase
+              ? { px: { xs: 2.5, sm: 3.5 }, pt: { xs: 1.5, sm: 1 }, pb: 0, overflow: "visible" }
+              : undefined
+          }
+        >
           {createdPriorityCase ? (
-            <Stack spacing={3} alignItems="center" sx={{ pt: 1, mx: "auto", maxWidth: 480 }}>
-              <Typography variant="h3" component="p" color="primary" fontWeight={800}>
-                {createdPriorityCase.publicCode} P
-              </Typography>
-              <Typography textAlign="center" sx={{ maxWidth: 440, lineHeight: 1.6 }}>
-                Muestre este código QR a la persona para que pueda seguir el estado de su atención.
-              </Typography>
-              <Box sx={{ p: 2, display: "grid", placeItems: "center" }}>
+            <Stack spacing={2} alignItems="center" textAlign="center" sx={{ mx: "auto", maxWidth: 544 }}>
+              <Box role="status" aria-live="polite" aria-atomic="true" sx={{ width: "100%" }}>
+                <Typography fontWeight={600} color="text.secondary">
+                  Su número de atención es
+                </Typography>
+                <Typography
+                  component="p"
+                  aria-label={getAccessiblePublicTicketLabel(
+                    createdPriorityCase.publicCode,
+                    createdPriorityCase.isPriority,
+                  )}
+                  sx={{
+                    mt: 0.5,
+                    color: ccviPalette.navy,
+                    fontSize: { xs: "3.5rem", sm: "5.875rem" },
+                    fontWeight: 800,
+                    lineHeight: 1.08,
+                    fontVariantNumeric: "tabular-nums",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {formatPublicTicketLabel(
+                    createdPriorityCase.publicCode,
+                    createdPriorityCase.isPriority,
+                  )}
+                </Typography>
+              </Box>
+              <Box
+                sx={{
+                  width: 176,
+                  height: 176,
+                  p: 1,
+                  borderRadius: "8px",
+                  border: "1px solid #E5E7EB",
+                  bgcolor: "#F3F4F6",
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
                 <QRCodeSVG
                   value={getPublicStatusUrl(createdPriorityCase.publicToken)}
-                  size={200}
+                  size={160}
                   title={`Código QR del turno preferencial ${createdPriorityCase.publicCode}`}
                 />
               </Box>
-              <Typography variant="h5" component="p" fontWeight={700}>
-                {createdPriorityCase.publicCode} P
-              </Typography>
-              <Typography color="text.secondary" textAlign="center">
-                Escanee el código con la cámara del teléfono.
-              </Typography>
+              <Stack spacing={1} alignItems="center" sx={{ width: "100%", maxWidth: 500 }}>
+                <Typography fontWeight={700} color="text.primary">
+                  Escanee y guarde este número de atención
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.4 }}>
+                  Muestre este código QR a la persona para que pueda seguir el estado de su atención desde su celular.
+                </Typography>
+              </Stack>
             </Stack>
           ) : priorityCreationOpen ? (
             <Typography sx={{ pt: 1 }}>
@@ -2055,9 +2339,22 @@ const OperatorView = ({
             </>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: { xs: 2.5, sm: 3 }, pt: 2, pb: { xs: 2.5, sm: 3 } }}>
+        <DialogActions
+          sx={{
+            px: { xs: 2.5, sm: 3 },
+            pt: 2,
+            pb: { xs: 2.5, sm: 3 },
+            justifyContent: createdPriorityCase ? "center" : undefined,
+          }}
+        >
           {createdPriorityCase ? (
-            <Button variant="contained" onClick={closePriorityDialog}>Finalizar</Button>
+            <Button
+              variant="contained"
+              onClick={closePriorityDialog}
+              sx={{ minHeight: 56, minWidth: 140, px: 4, borderRadius: "12px" }}
+            >
+              Finalizar
+            </Button>
           ) : (
             <>
           <Button onClick={closePriorityDialog}>Cancelar</Button>
@@ -2185,9 +2482,26 @@ const OperatorView = ({
               label="Teléfono de contacto"
               type="tel"
               value={rejectedCustomerPhone}
-              onChange={(event) => setRejectedCustomerPhone(event.target.value)}
-              helperText="Ejemplo: +56 9 1234 5678"
+              onChange={(event) => {
+                const startsWithPlus = event.target.value.trimStart().startsWith("+");
+                const maxDigits = startsWithPlus ? 11 : 9;
+                const digits = event.target.value.replace(/\D/g, "").slice(0, maxDigits);
+                setRejectedCustomerPhone(`${startsWithPlus ? "+" : ""}${digits}`);
+              }}
+              error={rejectedPhoneIsInvalid}
+              helperText={
+                rejectedPhoneIsInvalid
+                  ? "Ingrese 9 dígitos chilenos con inicio 2–7 o 9, o use +56 antes del número."
+                  : "Ejemplo: +56965732008"
+              }
               autoComplete="tel"
+              slotProps={{
+                htmlInput: {
+                  inputMode: "tel",
+                  pattern: "\\+?[0-9]*",
+                  maxLength: 12,
+                },
+              }}
               fullWidth
             />
           </Stack>
@@ -2197,12 +2511,13 @@ const OperatorView = ({
           <Button
             variant="contained"
             color="error"
+            disabled={rejectedPhoneIsInvalid}
             onClick={async () => {
               if (!rejectionDialogCase) return;
               const rejectedCaseId = rejectionDialogCase.caseId;
               const rejectedContact = {
                 customerName: rejectedCustomerName,
-                customerPhone: rejectedCustomerPhone,
+                customerPhone: normalizeChileanPhone(rejectedCustomerPhone),
               };
               closeRejectionDialog();
               const next = await finishDocumentValidationRealtime(
@@ -2219,7 +2534,8 @@ const OperatorView = ({
           </Button>
         </DialogActions>
       </Dialog>
-    </Page>
+      </Page>
+    </Box>
   );
 };
 
