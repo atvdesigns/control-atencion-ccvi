@@ -200,6 +200,19 @@ export const applyCallNextWindowMutation = (
   return { status: "called" as const, day, caseId: next.caseId };
 };
 
+export const callNextWindowResponse = (
+  status: "called" | "no-eligible-case" | "active-case",
+  publicCode?: string,
+) => {
+  if (status === "called") {
+    return { ok: true, outcome: "called" as const, ...(publicCode ? { publicCode } : {}) };
+  }
+  return {
+    ok: false,
+    outcome: status === "active-case" ? "active_case_exists" as const : "no_eligible_case" as const,
+  };
+};
+
 const parseInput = (value: unknown): KioskArrivalInput => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
@@ -464,11 +477,31 @@ export const createKioskArrival = onCall(
 export const callNextWindowCase = onCall(
   { region: "us-central1", enforceAppCheck: false },
   async (request) => {
+    const startedAt = Date.now();
+    let finalOutcomeLogged = false;
+    let safeWindow: number | null = null;
+    const logFinalOutcome = (
+      outcome: string,
+      details: { publicCode?: string } = {},
+    ) => {
+      if (finalOutcomeLogged) return;
+      finalOutcomeLogged = true;
+      console.info({
+        operation: "callNextWindowCase",
+        window: safeWindow,
+        outcome,
+        durationMs: Date.now() - startedAt,
+        ...details,
+      });
+    };
+
     try {
       if (!request.auth?.uid) {
+        logFinalOutcome("unauthenticated");
         throw new HttpsError("unauthenticated", "Debe iniciar sesión para continuar.");
       }
       if (!request.data || typeof request.data !== "object" || Array.isArray(request.data)) {
+        logFinalOutcome("invalid_request");
         throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
       }
       const input = request.data as Record<string, unknown>;
@@ -479,6 +512,7 @@ export const callNextWindowCase = onCall(
         typeof input.windowId !== "string" ||
         !windowIdPattern.test(input.windowId)
       ) {
+        logFinalOutcome("invalid_request");
         throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
       }
 
@@ -491,20 +525,38 @@ export const callNextWindowCase = onCall(
         database.ref(`centers/${centerId}`).get(),
       ]);
       if (!profileSnapshot.exists()) {
+        logFinalOutcome("missing_profile");
         throw new HttpsError("permission-denied", "Su cuenta no está habilitada para esta operación.");
       }
       if (!centerSnapshot.exists()) {
+        logFinalOutcome("invalid_center");
         throw new HttpsError("not-found", "El centro solicitado no está disponible.");
       }
 
       const profile = profileSnapshot.val() as UserProfile;
       const center = centerSnapshot.val() as CenterConfig;
+      if (profile.role === "operator-window-1") safeWindow = 1;
+      if (profile.role === "operator-window-2") safeWindow = 2;
+      if (profile.uid !== uid || profile.enabled !== true) {
+        logFinalOutcome("disabled_or_invalid_profile");
+        throw new HttpsError("permission-denied", "Su cuenta no está habilitada para esta operación.");
+      }
+      if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) {
+        logFinalOutcome("center_access_denied");
+        throw new HttpsError("permission-denied", "No tiene permisos para operar en este centro.");
+      }
+      if (!safeWindow) {
+        logFinalOutcome("wrong_role");
+        throw new HttpsError("permission-denied", "No tiene permisos para operar esta ventanilla.");
+      }
       const windows = valuesOf(center.windows);
       const windowId = authorizedWindowId(profile, uid, centerId, requestedWindowId, windows);
       if (!windowId) {
+        logFinalOutcome("wrong_window");
         throw new HttpsError("permission-denied", "No tiene permisos para operar esta ventanilla.");
       }
       if (center.centerId !== centerId || center.enabled !== true) {
+        logFinalOutcome("invalid_center");
         throw new HttpsError("failed-precondition", "El centro no está disponible.");
       }
 
@@ -539,7 +591,12 @@ export const callNextWindowCase = onCall(
       );
 
       if (!transaction.committed || mutationOutcome.status !== "called" || !mutationOutcome.caseId) {
-        return { status: mutationOutcome.status };
+        if (mutationOutcome.status === "called") {
+          throw new Error("CALL_NEXT_TRANSACTION_NOT_COMMITTED");
+        }
+        const response = callNextWindowResponse(mutationOutcome.status);
+        logFinalOutcome(response.outcome);
+        return response;
       }
       const committedCase = transaction.snapshot.child(`cases/${mutationOutcome.caseId}`).val() as WindowCase | null;
       if (!committedCase) throw new Error("COMMITTED_CASE_NOT_FOUND");
@@ -574,10 +631,11 @@ export const callNextWindowCase = onCall(
         },
       });
 
-      return { status: "called" as const };
+      logFinalOutcome("called", { publicCode: committedCase.publicCode });
+      return callNextWindowResponse("called", committedCase.publicCode);
     } catch (error) {
+      if (!finalOutcomeLogged) logFinalOutcome("internal_error");
       if (error instanceof HttpsError) throw error;
-      console.error("callNextWindowCase failed", error);
       throw new HttpsError("internal", "No fue posible llamar el siguiente turno. Intente nuevamente.");
     }
   },

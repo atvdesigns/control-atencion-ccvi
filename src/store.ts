@@ -19,6 +19,7 @@ import {
 } from "./centerJourneyConfig";
 import {
   callNextWindowCaseCallable,
+  type CallNextWindowCaseOutcome,
   database,
   publicDisplayCallEventUpdate,
   publicDisplayEntryUpdate,
@@ -1209,12 +1210,25 @@ export const callNextForOperatorRealtime = async (
   data: AppData,
   windowId: string,
   role: Role,
-): Promise<AppData> => {
-  if (!database) return callNextForOperator(data, windowId, role);
+): Promise<{ data: AppData; outcome: CallNextWindowCaseOutcome }> => {
+  if (!database) {
+    const hasActiveCase = Object.values(data.cases).some(
+      (caseItem) =>
+        caseItem.centerId === data.selectedCenterId &&
+        caseItem.assignedWindowId === windowId &&
+        ["called_to_window", "in_document_validation"].includes(caseItem.currentState),
+    );
+    if (hasActiveCase) return { data, outcome: "active_case_exists" };
+    const next = callNextForOperator(data, windowId, role);
+    return {
+      data: next,
+      outcome: next === data ? "no_eligible_case" : "called",
+    };
+  }
 
   const base = ensureSession(data);
-  await callNextWindowCaseCallable(base.selectedCenterId, windowId);
-  return base;
+  const result = await callNextWindowCaseCallable(base.selectedCenterId, windowId);
+  return { data: base, outcome: result.outcome };
 };
 
 export const startValidation = (data: AppData, caseId: string, role: Role): AppData => {

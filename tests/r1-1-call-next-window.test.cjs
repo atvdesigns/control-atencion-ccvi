@@ -26,7 +26,12 @@ vm.runInNewContext(code, {
   },
 });
 
-const { authorizedWindowId, selectNextWindowCase, applyCallNextWindowMutation } = exportsFromFunctions;
+const {
+  authorizedWindowId,
+  selectNextWindowCase,
+  applyCallNextWindowMutation,
+  callNextWindowResponse,
+} = exportsFromFunctions;
 const centerId = "ccvi-san-bernardo";
 const sessionId = `${centerId}-2026-09-16`;
 const windowId = "window-1";
@@ -166,4 +171,121 @@ test("no eligible case returns a safe no-op", () => {
   });
   assert.equal(result.status, "no-eligible-case");
   assert.equal(result.day, undefined);
+});
+
+test("called maps to the explicit client outcome contract", () => {
+  const response = callNextWindowResponse("called", "V1-01");
+  assert.equal(response.ok, true);
+  assert.equal(response.outcome, "called");
+  assert.equal(response.publicCode, "V1-01");
+});
+test("no eligible maps to an explicit business outcome", () => {
+  const response = callNextWindowResponse("no-eligible-case");
+  assert.equal(response.ok, false);
+  assert.equal(response.outcome, "no_eligible_case");
+});
+test("active case maps to an explicit business outcome", () => {
+  const response = callNextWindowResponse("active-case");
+  assert.equal(response.ok, false);
+  assert.equal(response.outcome, "active_case_exists");
+});
+
+const appText = fs.readFileSync(path.join(root, "src/App.tsx"), "utf8");
+const appSource = ts.createSourceFile("App.tsx", appText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const appDeclarations = new Map();
+for (const statement of appSource.statements) {
+  if (!ts.isVariableStatement(statement)) continue;
+  for (const declaration of statement.declarationList.declarations) {
+    appDeclarations.set(declaration.name.getText(appSource), declaration.initializer?.getText(appSource));
+  }
+}
+const uiExports = {};
+vm.runInNewContext(ts.transpileModule(
+  `exports.callNextWindowFeedback = ${appDeclarations.get("callNextWindowFeedback")};\n` +
+  `exports.executeCallNextWindow = ${appDeclarations.get("executeCallNextWindow")};`,
+  { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } },
+).outputText, { exports: uiExports });
+const { callNextWindowFeedback, executeCallNextWindow } = uiExports;
+
+test("no eligible outcome has visible safe feedback", () => {
+  assert.equal(callNextWindowFeedback("no_eligible_case"), "No hay turnos disponibles para llamar.");
+});
+test("active case outcome has visible safe feedback", () => {
+  assert.equal(
+    callNextWindowFeedback("active_case_exists"),
+    "Finalice la atención actual antes de llamar otro turno.",
+  );
+});
+test("called outcome does not add failure feedback", () => {
+  assert.equal(callNextWindowFeedback("called"), null);
+});
+
+const executeFixture = async (request) => {
+  const pendingRef = { current: false };
+  const loading = [];
+  const results = [];
+  let errors = 0;
+  await executeCallNextWindow({
+    pendingRef,
+    setLoading: (value) => loading.push(value),
+    request,
+    onResult: (value) => results.push(value),
+    onError: () => { errors += 1; },
+  });
+  return { pendingRef, loading, results, errors };
+};
+
+test("loading resets after successful call", async () => {
+  const result = await executeFixture(async () => ({ outcome: "called" }));
+  assert.deepEqual(result.loading, [true, false]);
+  assert.equal(result.pendingRef.current, false);
+  assert.equal(result.results[0].outcome, "called");
+});
+test("loading resets after business no-op", async () => {
+  const result = await executeFixture(async () => ({ outcome: "no_eligible_case" }));
+  assert.deepEqual(result.loading, [true, false]);
+  assert.equal(result.results[0].outcome, "no_eligible_case");
+});
+test("authorization or callable error shows safe feedback and resets loading", async () => {
+  const result = await executeFixture(async () => { throw new Error("permission-denied"); });
+  assert.deepEqual(result.loading, [true, false]);
+  assert.equal(result.errors, 1);
+  assert.equal(result.pendingRef.current, false);
+});
+test("duplicate click while pending does not issue another request", async () => {
+  const pendingRef = { current: false };
+  let requests = 0;
+  let release;
+  const first = executeCallNextWindow({
+    pendingRef,
+    setLoading() {},
+    request: () => { requests += 1; return new Promise((resolve) => { release = resolve; }); },
+    onResult() {},
+    onError() {},
+  });
+  await executeCallNextWindow({
+    pendingRef,
+    setLoading() {},
+    request: async () => { requests += 1; return {}; },
+    onResult() {},
+    onError() {},
+  });
+  assert.equal(requests, 1);
+  release({ outcome: "called" });
+  await first;
+});
+
+test("client layers propagate the callable outcome instead of discarding it", () => {
+  const firebaseSource = fs.readFileSync(path.join(root, "src/services/firebase.ts"), "utf8");
+  const storeSource = fs.readFileSync(path.join(root, "src/store.ts"), "utf8");
+  assert.match(firebaseSource, /result\.data\.outcome/);
+  assert.match(storeSource, /outcome: result\.outcome/);
+});
+test("backend emits one guarded privacy-safe final outcome", () => {
+  assert.match(source, /if \(finalOutcomeLogged\) return/);
+  assert.match(source, /operation: "callNextWindowCase"/);
+  for (const forbidden of ["email", "publicToken", "caseId", "priorityType", "optionalInternalNote"]) {
+    const loggingBlock = source.slice(source.indexOf("const logFinalOutcome"), source.indexOf("try {", source.indexOf("const logFinalOutcome")));
+    assert.doesNotMatch(loggingBlock, new RegExp(forbidden));
+  }
 });

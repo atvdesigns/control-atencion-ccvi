@@ -137,6 +137,7 @@ import {
   writeCenterConfigRealtime,
   writePublicKioskConfigRealtime,
   type AuthSessionState,
+  type CallNextWindowCaseOutcome,
   type OperationalDaySnapshot,
   type PublicKioskConfig,
 } from "./services/firebase";
@@ -1661,16 +1662,52 @@ const CenteredShell = ({ children }: { children: React.ReactNode }) => (
   </Box>
 );
 
+export const callNextWindowFeedback = (outcome: CallNextWindowCaseOutcome) => {
+  if (outcome === "no_eligible_case") return "No hay turnos disponibles para llamar.";
+  if (outcome === "active_case_exists") {
+    return "Finalice la atención actual antes de llamar otro turno.";
+  }
+  return null;
+};
+
+export const executeCallNextWindow = async <T,>({
+  pendingRef,
+  setLoading,
+  request,
+  onResult,
+  onError,
+}: {
+  pendingRef: { current: boolean };
+  setLoading: (loading: boolean) => void;
+  request: () => Promise<T>;
+  onResult: (result: T) => void;
+  onError: () => void;
+}) => {
+  if (pendingRef.current) return;
+  pendingRef.current = true;
+  setLoading(true);
+  try {
+    onResult(await request());
+  } catch {
+    onError();
+  } finally {
+    pendingRef.current = false;
+    setLoading(false);
+  }
+};
+
 const OperatorView = ({
   operatorWindow,
   role,
   data,
   setData,
+  onFeedback,
 }: {
   operatorWindow: NonNullable<ReturnType<typeof windowForRole>>;
   role: Role;
   data: AppData;
   setData: (updater: (data: AppData) => AppData) => void;
+  onFeedback: (message: string) => void;
 }) => {
   const [priorityDialogCase, setPriorityDialogCase] = useState<CaseRecord | null>(null);
   const [priorityCreationOpen, setPriorityCreationOpen] = useState(false);
@@ -1681,6 +1718,8 @@ const OperatorView = ({
   const [rejectionDialogCase, setRejectionDialogCase] = useState<CaseRecord | null>(null);
   const [rejectedCustomerName, setRejectedCustomerName] = useState("");
   const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
+  const [isCallingNext, setIsCallingNext] = useState(false);
+  const callNextPendingRef = useRef(false);
   const rejectedPhoneIsInvalid = Boolean(rejectedCustomerPhone) && !normalizeChileanPhone(rejectedCustomerPhone);
   const closePriorityDialog = () => {
     setPriorityDialogCase(null);
@@ -1837,17 +1876,28 @@ const OperatorView = ({
                   color="secondary"
                   startIcon={<PlayArrow />}
                   onClick={async () => {
-                    const next = await callNextForOperatorRealtime(
-                      data,
-                      operatorWindow.windowId,
-                      role,
-                    );
-                    setData(() => next);
+                    await executeCallNextWindow({
+                      pendingRef: callNextPendingRef,
+                      setLoading: setIsCallingNext,
+                      request: () => callNextForOperatorRealtime(
+                        data,
+                        operatorWindow.windowId,
+                        role,
+                      ),
+                      onResult: (result) => {
+                        setData(() => result.data);
+                        const feedback = callNextWindowFeedback(result.outcome);
+                        if (feedback) onFeedback(feedback);
+                      },
+                      onError: () => onFeedback(
+                        "No fue posible llamar al siguiente turno. Intente nuevamente.",
+                      ),
+                    });
                   }}
-                  disabled={Boolean(activeCase) || waitingCases.length === 0}
+                  disabled={isCallingNext || Boolean(activeCase) || waitingCases.length === 0}
                         sx={{ ...operatorActionSx, width: "100%", flex: 1 }}
                       >
-                        Siguiente turno
+                        {isCallingNext ? "Llamando…" : "Siguiente turno"}
                       </Button>
             <Button
               variant="contained"
@@ -4858,7 +4908,7 @@ const App = () => {
       <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? () => void signOutCurrentUser() : undefined} />
       {effectiveRole === "kiosk" && <KioskView centerId={data.selectedCenterId} />}
       {effectiveRole.startsWith("operator") && activeOperatorWindow && (
-        <OperatorView operatorWindow={activeOperatorWindow} role={effectiveRole} data={privateData} setData={setData} />
+        <OperatorView operatorWindow={activeOperatorWindow} role={effectiveRole} data={privateData} setData={setData} onFeedback={setSnackbar} />
       )}
       {effectiveRole.startsWith("operator") && !activeOperatorWindow && (
         <Page title="Ventanilla no disponible">

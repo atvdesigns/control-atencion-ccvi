@@ -79,8 +79,15 @@ interface CreateKioskArrivalResponse {
   publicToken: string;
 }
 
-interface CallNextWindowCaseResponse {
-  status: "called" | "no-eligible-case" | "active-case";
+export type CallNextWindowCaseOutcome =
+  | "called"
+  | "no_eligible_case"
+  | "active_case_exists";
+
+export interface CallNextWindowCaseResponse {
+  ok: boolean;
+  outcome: CallNextWindowCaseOutcome;
+  publicCode?: string;
 }
 
 export interface PublicKioskConfig {
@@ -133,7 +140,9 @@ export const callNextWindowCaseCallable = async (
   const result = await callable({ centerId, windowId });
   if (
     !result.data ||
-    !["called", "no-eligible-case", "active-case"].includes(result.data.status)
+    typeof result.data.ok !== "boolean" ||
+    !["called", "no_eligible_case", "active_case_exists"].includes(result.data.outcome) ||
+    (result.data.publicCode !== undefined && typeof result.data.publicCode !== "string")
   ) {
     throw new Error("INVALID_CALL_NEXT_WINDOW_RESPONSE");
   }
