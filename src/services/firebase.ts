@@ -79,6 +79,10 @@ interface CreateKioskArrivalResponse {
   publicToken: string;
 }
 
+interface CallNextWindowCaseResponse {
+  status: "called" | "no-eligible-case" | "active-case";
+}
+
 export interface PublicKioskConfig {
   centerId: string;
   enabled: boolean;
@@ -112,6 +116,26 @@ export const createKioskArrivalCallable = async (
     typeof result.data.publicToken !== "string"
   ) {
     throw new Error("INVALID_KIOSK_ARRIVAL_RESPONSE");
+  }
+  return result.data;
+};
+
+export const callNextWindowCaseCallable = async (
+  centerId: string,
+  windowId: string,
+): Promise<CallNextWindowCaseResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+
+  const callable = httpsCallable<
+    { centerId: string; windowId: string },
+    CallNextWindowCaseResponse
+  >(functions, "callNextWindowCase");
+  const result = await callable({ centerId, windowId });
+  if (
+    !result.data ||
+    !["called", "no-eligible-case", "active-case"].includes(result.data.status)
+  ) {
+    throw new Error("INVALID_CALL_NEXT_WINDOW_RESPONSE");
   }
   return result.data;
 };

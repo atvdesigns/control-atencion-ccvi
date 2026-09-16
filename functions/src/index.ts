@@ -37,9 +37,47 @@ interface CenterConfig {
   paymentMethods?: Array<{ label?: unknown; accepted?: unknown }> | Record<string, { label?: unknown; accepted?: unknown }>;
 }
 
+type WindowRole = "operator-window-1" | "operator-window-2";
+
+interface UserProfile {
+  uid: string;
+  role: "admin" | WindowRole | "cashier";
+  centerIds: string[];
+  centerAccess: Record<string, true>;
+  enabled: boolean;
+}
+
+interface WindowCase {
+  caseId: string;
+  publicToken: string;
+  centerId: string;
+  sessionId: string;
+  publicCode: string;
+  globalArrivalSequence: number;
+  serviceType: ServiceType;
+  serviceLabel: string;
+  assignedWindowId: string;
+  assignedWindowNumber: number;
+  assignedOperatorId: string | null;
+  isPriority: boolean;
+  currentState: string;
+  arrivalAt: number;
+  calledToWindowAt: number | null;
+  updatedAt: number;
+  [key: string]: unknown;
+}
+
+interface WindowDay {
+  metadata?: Record<string, unknown>;
+  cases?: Record<string, WindowCase>;
+  events?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 const serviceTypes: ServiceType[] = ["representation", "vehicle_owner"];
 const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const centerIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
+const windowIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
 
 const recordOf = <T>(value: unknown): Record<string, T> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -48,6 +86,119 @@ const recordOf = <T>(value: unknown): Record<string, T> =>
 
 const valuesOf = <T>(value: T[] | Record<string, T> | undefined): T[] =>
   Array.isArray(value) ? value : Object.values(value ?? {});
+
+export const selectNextWindowCase = (
+  cases: Record<string, WindowCase>,
+  centerId: string,
+  sessionId: string,
+  windowId: string,
+  consecutivePriorityCases: number,
+) => {
+  const eligible = Object.values(cases)
+    .filter((caseItem) =>
+      caseItem.centerId === centerId &&
+      caseItem.sessionId === sessionId &&
+      caseItem.assignedWindowId === windowId &&
+      caseItem.currentState === "waiting_document_validation")
+    .sort((a, b) =>
+      a.arrivalAt - b.arrivalAt ||
+      a.globalArrivalSequence - b.globalArrivalSequence ||
+      a.caseId.localeCompare(b.caseId));
+  const priority = eligible.filter((caseItem) => caseItem.isPriority);
+  const regular = eligible.filter((caseItem) => !caseItem.isPriority);
+  if (priority.length > 0 && (regular.length === 0 || consecutivePriorityCases < 2)) {
+    return priority[0];
+  }
+  return regular[0] ?? priority[0];
+};
+
+export const authorizedWindowId = (
+  profile: UserProfile | null,
+  uid: string,
+  centerId: string,
+  requestedWindowId: string,
+  windows: CenterWindow[],
+) => {
+  if (!profile || profile.uid !== uid || profile.enabled !== true) return null;
+  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) return null;
+  const windowNumber = profile.role === "operator-window-1" ? 1 :
+    profile.role === "operator-window-2" ? 2 : null;
+  if (!windowNumber) return null;
+  const windowItem = windows.find((item) => item.windowNumber === windowNumber);
+  return windowItem?.windowId === requestedWindowId ? windowItem.windowId : null;
+};
+
+export const applyCallNextWindowMutation = (
+  currentDay: WindowDay | null,
+  context: {
+    centerId: string;
+    sessionId: string;
+    windowId: string;
+    role: WindowRole;
+    uid: string;
+    timestamp: number;
+    eventId: string;
+  },
+) => {
+  if (!currentDay) return { status: "no-eligible-case" as const, day: undefined, caseId: null };
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const hasActiveCase = Object.values(cases).some((caseItem) =>
+    caseItem.centerId === context.centerId &&
+    caseItem.sessionId === context.sessionId &&
+    caseItem.assignedWindowId === context.windowId &&
+    ["called_to_window", "in_document_validation"].includes(caseItem.currentState));
+  if (hasActiveCase) return { status: "active-case" as const, day: undefined, caseId: null };
+
+  const metadata = recordOf<unknown>(currentDay.metadata);
+  const counters = recordOf<number>(metadata.consecutivePriorityCasesByWindow);
+  const previousPriorityCount = Number.isSafeInteger(counters[context.windowId])
+    ? counters[context.windowId]
+    : 0;
+  const next = selectNextWindowCase(
+    cases,
+    context.centerId,
+    context.sessionId,
+    context.windowId,
+    previousPriorityCount,
+  );
+  if (!next) return { status: "no-eligible-case" as const, day: undefined, caseId: null };
+
+  const nextCase: WindowCase = {
+    ...next,
+    assignedOperatorId: context.role,
+    currentState: "called_to_window",
+    calledToWindowAt: context.timestamp,
+    updatedAt: context.timestamp,
+  };
+  const day: WindowDay = {
+    ...currentDay,
+    metadata: {
+      ...metadata,
+      consecutivePriorityCasesByWindow: {
+        ...counters,
+        [context.windowId]: next.isPriority ? previousPriorityCount + 1 : 0,
+      },
+    },
+    cases: { ...cases, [next.caseId]: nextCase },
+    events: {
+      ...recordOf(currentDay.events),
+      [context.eventId]: {
+        eventId: context.eventId,
+        centerId: context.centerId,
+        sessionId: context.sessionId,
+        caseId: next.caseId,
+        actorRole: context.role,
+        actorId: context.role,
+        action: "called_to_window",
+        fromState: next.currentState,
+        toState: "called_to_window",
+        timestamp: context.timestamp,
+        optionalNote: null,
+      },
+    },
+  };
+  return { status: "called" as const, day, caseId: next.caseId };
+};
 
 const parseInput = (value: unknown): KioskArrivalInput => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -306,6 +457,128 @@ export const createKioskArrival = onCall(
       if (error instanceof HttpsError) throw error;
       console.error("createKioskArrival failed", error);
       throw new HttpsError("internal", "No fue posible crear el turno. Intente nuevamente.");
+    }
+  },
+);
+
+export const callNextWindowCase = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    try {
+      if (!request.auth?.uid) {
+        throw new HttpsError("unauthenticated", "Debe iniciar sesión para continuar.");
+      }
+      if (!request.data || typeof request.data !== "object" || Array.isArray(request.data)) {
+        throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
+      }
+      const input = request.data as Record<string, unknown>;
+      if (
+        Object.keys(input).length !== 2 ||
+        typeof input.centerId !== "string" ||
+        !centerIdPattern.test(input.centerId) ||
+        typeof input.windowId !== "string" ||
+        !windowIdPattern.test(input.windowId)
+      ) {
+        throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
+      }
+
+      const centerId = input.centerId;
+      const requestedWindowId = input.windowId;
+      const uid = request.auth.uid;
+      const database = getDatabase();
+      const [profileSnapshot, centerSnapshot] = await Promise.all([
+        database.ref(`users/${uid}`).get(),
+        database.ref(`centers/${centerId}`).get(),
+      ]);
+      if (!profileSnapshot.exists()) {
+        throw new HttpsError("permission-denied", "Su cuenta no está habilitada para esta operación.");
+      }
+      if (!centerSnapshot.exists()) {
+        throw new HttpsError("not-found", "El centro solicitado no está disponible.");
+      }
+
+      const profile = profileSnapshot.val() as UserProfile;
+      const center = centerSnapshot.val() as CenterConfig;
+      const windows = valuesOf(center.windows);
+      const windowId = authorizedWindowId(profile, uid, centerId, requestedWindowId, windows);
+      if (!windowId) {
+        throw new HttpsError("permission-denied", "No tiene permisos para operar esta ventanilla.");
+      }
+      if (center.centerId !== centerId || center.enabled !== true) {
+        throw new HttpsError("failed-precondition", "El centro no está disponible.");
+      }
+
+      const now = new Date();
+      const timestamp = now.getTime();
+      const { dayId } = dateTimeInZone(now, center.timezone);
+      const sessionId = `${centerId}-${dayId}`;
+      const eventId = randomUUID();
+      const dayReference = database.ref(`days/${centerId}/${dayId}`);
+      const mutationOutcome: {
+        status: "called" | "no-eligible-case" | "active-case";
+        caseId: string | null;
+      } = { status: "no-eligible-case", caseId: null };
+
+      const transaction = await dayReference.transaction(
+        (currentValue) => {
+          const mutation = applyCallNextWindowMutation(currentValue as WindowDay | null, {
+            centerId,
+            sessionId,
+            windowId,
+            role: profile.role as WindowRole,
+            uid,
+            timestamp,
+            eventId,
+          });
+          mutationOutcome.status = mutation.status;
+          mutationOutcome.caseId = mutation.caseId;
+          return mutation.day;
+        },
+        undefined,
+        false,
+      );
+
+      if (!transaction.committed || mutationOutcome.status !== "called" || !mutationOutcome.caseId) {
+        return { status: mutationOutcome.status };
+      }
+      const committedCase = transaction.snapshot.child(`cases/${mutationOutcome.caseId}`).val() as WindowCase | null;
+      if (!committedCase) throw new Error("COMMITTED_CASE_NOT_FOUND");
+
+      const destination = `Ventanilla ${committedCase.assignedWindowNumber}`;
+      await database.ref().update({
+        [`public/turns/${committedCase.publicToken}`]: {
+          centerId,
+          publicCode: committedCase.publicCode,
+          isPriority: committedCase.isPriority,
+          status: `Diríjase a ${destination}`,
+          serviceType: committedCase.serviceType,
+          serviceLabel: committedCase.serviceLabel,
+          destination,
+          updatedAt: timestamp,
+          requirements: publicRequirements(center, committedCase.serviceType),
+          paymentMethods: publicPaymentMethods(center),
+        },
+        [`public/displays/${centerId}/${dayId}/${committedCase.caseId}`]: {
+          publicCode: committedCase.publicCode,
+          isPriority: committedCase.isPriority,
+          status: `Diríjase a ${destination}`,
+          destination,
+          updatedAt: timestamp,
+        },
+        [`public/displayCalls/${centerId}/${dayId}/${eventId}`]: {
+          publicCode: committedCase.publicCode,
+          isPriority: committedCase.isPriority,
+          destinationType: "window",
+          destinationLabel: destination,
+          calledAt: timestamp,
+        },
+      });
+
+      return { status: "called" as const };
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      console.error("callNextWindowCase failed", error);
+      throw new HttpsError("internal", "No fue posible llamar el siguiente turno. Intente nuevamente.");
     }
   },
 );

@@ -18,6 +18,7 @@ import {
   normalizePaymentMethods,
 } from "./centerJourneyConfig";
 import {
+  callNextWindowCaseCallable,
   database,
   publicDisplayCallEventUpdate,
   publicDisplayEntryUpdate,
@@ -1212,113 +1213,8 @@ export const callNextForOperatorRealtime = async (
   if (!database) return callNextForOperator(data, windowId, role);
 
   const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const now = Date.now();
-  const eventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(database, `days/${base.selectedCenterId}/${session.date}`);
-
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      if (!currentValue) return;
-
-      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
-      const remoteMetadata = currentValue.metadata ?? {};
-      const remoteSession = {
-        ...session,
-        ...remoteMetadata,
-      };
-      const transactionData: AppData = {
-        ...base,
-        cases: remoteCases,
-        sessions: {
-          ...base.sessions,
-          [session.sessionId]: remoteSession,
-        },
-      };
-      const hasActiveCase = Object.values(remoteCases).some(
-        (caseItem) =>
-          caseItem.centerId === base.selectedCenterId &&
-          caseItem.sessionId === session.sessionId &&
-          caseItem.assignedWindowId === windowId &&
-          ["called_to_window", "in_document_validation"].includes(caseItem.currentState),
-      );
-      if (hasActiveCase) return;
-
-      const next = nextOperatorCase(transactionData, windowId);
-      if (!next || next.currentState !== "waiting_document_validation") return;
-
-      const previousPriorityCount =
-        remoteSession.consecutivePriorityCasesByWindow?.[windowId] ?? 0;
-      const nextPriorityCount = next.isPriority ? previousPriorityCount + 1 : 0;
-      const nextCase: CaseRecord = {
-        ...next,
-        assignedOperatorId: role,
-        currentState: "called_to_window",
-        calledToWindowAt: now,
-        updatedAt: now,
-      };
-      const callEvent: TraceEvent = {
-        eventId,
-        centerId: next.centerId,
-        sessionId: next.sessionId,
-        caseId: next.caseId,
-        actorRole: role,
-        actorId: role,
-        action: "called_to_window",
-        fromState: next.currentState,
-        toState: nextCase.currentState,
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentValue,
-        metadata: {
-          ...remoteSession,
-          consecutivePriorityCasesByWindow: {
-            ...remoteSession.consecutivePriorityCasesByWindow,
-            [windowId]: nextPriorityCount,
-          },
-        },
-        cases: {
-          ...remoteCases,
-          [next.caseId]: nextCase,
-        },
-        events: {
-          ...collectionRecord<TraceEvent>(currentValue.events),
-          [eventId]: callEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
-
-  if (!result.committed) return base;
-
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedMetadata = committedDay?.metadata;
-  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
-  if (!committedDay?.cases || !committedMetadata || !committedEvent) return base;
-  const committedCase = committedDay.cases[committedEvent.caseId];
-  if (!committedCase) return base;
-
-  await syncPublicCaseProjection(
-    committedCase,
-    getCurrentCenter(base),
-    session.date,
-    { eventId, destinationType: "window", calledAt: now },
-  );
-
-  return {
-    ...base,
-    sessions: {
-      ...base.sessions,
-      [session.sessionId]: { ...session, ...committedMetadata },
-    },
-    cases: { ...base.cases, ...committedDay.cases },
-    events: [committedEvent, ...base.events],
-  };
+  await callNextWindowCaseCallable(base.selectedCenterId, windowId);
+  return base;
 };
 
 export const startValidation = (data: AppData, caseId: string, role: Role): AppData => {
