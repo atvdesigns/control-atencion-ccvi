@@ -32,7 +32,18 @@ import {
 
 const STORAGE_KEY = "ccvi-control-atencion-demo-v2-3";
 
-export const todayId = () => new Date().toISOString().slice(0, 10);
+export const todayId = (timezone = "America/Santiago", now = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value;
+
+  return `${part("year")}-${part("month")}-${part("day")}`;
+};
 
 const DEFAULT_SERVICE_START_TIME = "08:00";
 const DEFAULT_SERVICE_END_TIME = "17:00";
@@ -317,7 +328,8 @@ export const defaultCenter = (now = Date.now()): CenterConfig => ({
 
 export const createInitialData = (): AppData => {
   const center = defaultCenter();
-  const sessionId = `${center.centerId}-${todayId()}`;
+  const date = todayId(center.timezone);
+  const sessionId = `${center.centerId}-${date}`;
 
   return {
     selectedCenterId: center.centerId,
@@ -328,7 +340,7 @@ export const createInitialData = (): AppData => {
       [sessionId]: {
         sessionId,
         centerId: center.centerId,
-        date: todayId(),
+        date,
         status: "open",
         nextGlobalArrivalSequence: 1,
         windowSequences: windowSequencesFor(center),
@@ -346,7 +358,8 @@ export const createInitialData = (): AppData => {
   };
 };
 
-export const getSessionId = (data: AppData) => `${data.selectedCenterId}-${todayId()}`;
+export const getSessionId = (data: AppData) =>
+  `${data.selectedCenterId}-${todayId(data.centers[data.selectedCenterId].timezone)}`;
 
 export const getCurrentCenter = (data: AppData) => data.centers[data.selectedCenterId];
 
@@ -397,7 +410,7 @@ export const ensureSession = (data: AppData): AppData => {
       [sessionId]: {
         sessionId,
         centerId: data.selectedCenterId,
-        date: todayId(),
+        date: sessionId.slice(-10),
         status: "open",
         nextGlobalArrivalSequence: 1,
         windowSequences: windowSequencesFor(center),

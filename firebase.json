@@ -2,6 +2,12 @@
   "hosting": {
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "headers": [
+      {
+        "regex": "^/([^./]+/)*[^./]*$|^/.*\\.html$",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      }
+    ],
     "rewrites": [{ "source": "**", "destination": "/index.html" }]
   },
   "database": {

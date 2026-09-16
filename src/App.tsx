@@ -74,6 +74,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PublicJourneyStepper } from "./components/PublicJourneyStepper";
 import { PublicJourneyInformation } from "./components/PublicJourneyInformation";
+import { useOperationalDay } from "./useOperationalDay";
 import {
   getPublicJourneyPresentation,
   getPublicJourneyStep,
@@ -88,6 +89,7 @@ import {
   completePaymentRealtime,
   createCenter,
   deleteCenter,
+  ensureSession,
   formatServiceHours,
   formatDuration,
   getAccessiblePublicCode,
@@ -3250,6 +3252,7 @@ const AdminView = ({
     .filter((sessionItem) => sessionItem.centerId === center.centerId)
     .sort((a, b) => b.date.localeCompare(a.date));
   const [selectedMetricsSessionId, setSelectedMetricsSessionId] = useState(session.sessionId);
+  const previousLiveSessionId = useRef(session.sessionId);
   const [cashierPerformancePeriod, setCashierPerformancePeriod] = useState<"today" | "week" | "month">("today");
   const [rejectedUsersPeriod, setRejectedUsersPeriod] = useState<"today" | "week" | "month" | "year">("today");
   const selectedMetricsSession = data.sessions[selectedMetricsSessionId] ?? session;
@@ -3401,9 +3404,13 @@ const AdminView = ({
   const canDeleteCenters = Object.keys(data.centers).length > 1;
 
   useEffect(() => {
-    if (!availableSessions.some((sessionItem) => sessionItem.sessionId === selectedMetricsSessionId)) {
+    if (
+      selectedMetricsSessionId === previousLiveSessionId.current ||
+      !availableSessions.some((sessionItem) => sessionItem.sessionId === selectedMetricsSessionId)
+    ) {
       setSelectedMetricsSessionId(session.sessionId);
     }
+    previousLiveSessionId.current = session.sessionId;
   }, [availableSessions, selectedMetricsSessionId, session.sessionId]);
 
   return (
@@ -4568,9 +4575,9 @@ const LoginShell = ({ children }: { children: React.ReactNode }) => (
 );
 
 const App = () => {
-  const [data, setDataState] = useState<AppData>(() => loadData());
+  const [storedData, setDataState] = useState<AppData>(() => loadData());
   const [remoteOperationalDay, setRemoteOperationalDay] =
-    useState<OperationalDaySnapshot | null>(null);
+    useState<{ centerId: string; dayId: string; snapshot: OperationalDaySnapshot } | null>(null);
   const [role, setRoleState] = useState<Role>(() => getRoleFromUrl());
   const [snackbar, setSnackbar] = useState<string | null>(null);
   const [authSession, setAuthSession] = useState<AuthSessionState>({
@@ -4601,6 +4608,16 @@ const App = () => {
     requestedRole && ["admin", "operator-window-1", "operator-window-2", "cashier"].includes(requestedRole),
   );
   const privateAccessRequested = loginRouteRequested || legacyPrivateEntryRequested;
+
+  const rolloverEnabled = authSession.status === "authenticated" && !publicToken && !publicSurfaceRole;
+  const operationalDayId = useOperationalDay(
+    storedData.centers[storedData.selectedCenterId].timezone,
+    rolloverEnabled,
+  );
+  const data = useMemo(
+    () => rolloverEnabled && !getCurrentSession(storedData) ? ensureSession(storedData) : storedData,
+    [storedData, rolloverEnabled, operationalDayId],
+  );
 
   useEffect(() => observeAuthSession(setAuthSession), []);
 
@@ -4693,11 +4710,18 @@ const App = () => {
     if (!selectedDayId) return;
     if (authenticatedProfile && !hasAuthorizedCenter) return;
 
-    return subscribeToOperationalDay(
+    let active = true;
+    const unsubscribe = subscribeToOperationalDay(
       selectedCenterId,
       selectedDayId,
-      setRemoteOperationalDay,
+      (snapshot) => {
+        if (active) setRemoteOperationalDay({ centerId: selectedCenterId, dayId: selectedDayId, snapshot });
+      },
     );
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [authenticatedProfile, hasAuthorizedCenter, selectedCenterId, selectedDayId]);
 
   useEffect(() => {
@@ -4776,25 +4800,29 @@ const App = () => {
 
   const effectiveRole: Role = publicSurfaceRole ?? authenticatedProfile?.role ?? role;
   const operationalData: AppData = (() => {
-    if (!remoteOperationalDay) return data;
+    const snapshot = remoteOperationalDay?.centerId === selectedCenterId &&
+      remoteOperationalDay.dayId === selectedDayId ? remoteOperationalDay.snapshot : null;
+    if (!snapshot) {
+      return rolloverEnabled ? { ...data, cases: {}, paymentQueue: {}, events: [] } : data;
+    }
 
     const currentSession = getCurrentSession(data);
-    const remoteMetadata = remoteOperationalDay.metadata &&
-      typeof remoteOperationalDay.metadata === "object"
-      ? remoteOperationalDay.metadata as Partial<SessionMetadata>
+    const remoteMetadata = snapshot.metadata &&
+      typeof snapshot.metadata === "object"
+      ? snapshot.metadata as Partial<SessionMetadata>
       : null;
-    const remoteCases = remoteOperationalDay.cases &&
-      typeof remoteOperationalDay.cases === "object"
-      ? remoteOperationalDay.cases as AppData["cases"]
+    const remoteCases = snapshot.cases &&
+      typeof snapshot.cases === "object"
+      ? snapshot.cases as AppData["cases"]
       : {};
-    const remotePaymentQueue = remoteOperationalDay.paymentQueue &&
-      typeof remoteOperationalDay.paymentQueue === "object"
-      ? remoteOperationalDay.paymentQueue as AppData["paymentQueue"]
+    const remotePaymentQueue = snapshot.paymentQueue &&
+      typeof snapshot.paymentQueue === "object"
+      ? snapshot.paymentQueue as AppData["paymentQueue"]
       : {};
-    const remoteEvents = Array.isArray(remoteOperationalDay.events)
-      ? remoteOperationalDay.events as AppData["events"]
-      : remoteOperationalDay.events && typeof remoteOperationalDay.events === "object"
-        ? Object.values(remoteOperationalDay.events as Record<string, AppData["events"][number]>)
+    const remoteEvents = Array.isArray(snapshot.events)
+      ? snapshot.events as AppData["events"]
+      : snapshot.events && typeof snapshot.events === "object"
+        ? Object.values(snapshot.events as Record<string, AppData["events"][number]>)
         : [];
 
     return {
