@@ -1716,8 +1716,10 @@ const OperatorView = ({
   const [rejectedCustomerName, setRejectedCustomerName] = useState("");
   const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
   const [isCallingNext, setIsCallingNext] = useState(false);
+  const [isWindowTransitionPending, setIsWindowTransitionPending] = useState(false);
   const [scheduleNow, setScheduleNow] = useState(() => new Date());
   const callNextPendingRef = useRef(false);
+  const windowTransitionPendingRef = useRef(false);
   const rejectedPhoneIsInvalid = Boolean(rejectedCustomerPhone) && !normalizeChileanPhone(rejectedCustomerPhone);
   const closePriorityDialog = () => {
     setPriorityDialogCase(null);
@@ -2037,13 +2039,17 @@ const OperatorView = ({
                       variant="contained"
                       sx={operatorActionSx}
                       onClick={async () => {
-                        const next = await startValidationRealtime(
-                          data,
-                          activeCase.caseId,
-                          role,
-                        );
-                        setData(() => next);
+                        await executeCallNextWindow({
+                          pendingRef: windowTransitionPendingRef,
+                          setLoading: setIsWindowTransitionPending,
+                          request: () => startValidationRealtime(data, activeCase.caseId, role),
+                          onResult: (next) => setData(() => next),
+                          onError: () => onFeedback(
+                            "No pudimos iniciar la validación. Intente nuevamente.",
+                          ),
+                        });
                       }}
+                      disabled={isWindowTransitionPending}
                     >
                       Iniciar validación
                     </Button>
@@ -2052,13 +2058,17 @@ const OperatorView = ({
                       color="warning"
                       sx={operatorActionSx}
                       onClick={async () => {
-                        const next = await markWindowNoShowRealtime(
-                          data,
-                          activeCase.caseId,
-                          role,
-                        );
-                        setData(() => next);
+                        await executeCallNextWindow({
+                          pendingRef: windowTransitionPendingRef,
+                          setLoading: setIsWindowTransitionPending,
+                          request: () => markWindowNoShowRealtime(data, activeCase.caseId, role),
+                          onResult: (next) => setData(() => next),
+                          onError: () => onFeedback(
+                            "No pudimos registrar que la persona no se presentó. Intente nuevamente.",
+                          ),
+                        });
                       }}
+                      disabled={isWindowTransitionPending}
                     >
                       No se presentó
                     </Button>

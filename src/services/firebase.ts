@@ -135,6 +135,27 @@ export interface UpdateCasePriorityResponse {
   event?: TraceEvent;
 }
 
+export type WindowTransitionOutcome =
+  | "started"
+  | "no_show"
+  | "started_projection_failed"
+  | "no_show_projection_failed"
+  | "case_not_found"
+  | "unauthenticated"
+  | "unauthorized"
+  | "invalid_request"
+  | "invalid_case_state"
+  | "conflict"
+  | "config_unavailable"
+  | "internal_error";
+
+export interface WindowTransitionResponse {
+  ok: boolean;
+  outcome: WindowTransitionOutcome;
+  caseRecord?: CaseRecord;
+  event?: TraceEvent;
+}
+
 export interface PublicKioskConfig {
   centerId: string;
   enabled: boolean;
@@ -243,6 +264,34 @@ export const updateCasePriorityCallable = async (
   }
   return result.data;
 };
+
+const windowTransitionCallable = async (
+  name: "startWindowValidation" | "markWindowCaseNoShow",
+  centerId: string,
+  caseId: string,
+): Promise<WindowTransitionResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<{ centerId: string; caseId: string }, WindowTransitionResponse>(functions, name);
+  const result = await callable({ centerId, caseId });
+  const outcomes: WindowTransitionOutcome[] = [
+    "started", "no_show", "started_projection_failed", "no_show_projection_failed",
+    "case_not_found", "unauthenticated", "unauthorized", "invalid_request",
+    "invalid_case_state", "conflict", "config_unavailable", "internal_error",
+  ];
+  if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome)) {
+    throw new Error("INVALID_WINDOW_TRANSITION_RESPONSE");
+  }
+  if (result.data.ok && (!result.data.caseRecord || !result.data.event)) {
+    throw new Error("INVALID_WINDOW_TRANSITION_RESPONSE");
+  }
+  return result.data;
+};
+
+export const startWindowValidationCallable = (centerId: string, caseId: string) =>
+  windowTransitionCallable("startWindowValidation", centerId, caseId);
+
+export const markWindowCaseNoShowCallable = (centerId: string, caseId: string) =>
+  windowTransitionCallable("markWindowCaseNoShow", centerId, caseId);
 
 const configuredUsernameDomain =
   import.meta.env.VITE_FIREBASE_USERNAME_DOMAIN?.trim().toLowerCase();

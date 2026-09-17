@@ -20,6 +20,8 @@ import {
 import {
   callNextWindowCaseCallable,
   createPriorityArrivalCallable,
+  markWindowCaseNoShowCallable,
+  startWindowValidationCallable,
   updateCasePriorityCallable,
   type CallNextWindowCaseOutcome,
   database,
@@ -1037,85 +1039,11 @@ export const startValidationRealtime = async (
 ): Promise<AppData> => {
   if (!database) return startValidation(data, caseId, role);
 
-  const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const expectedCase = base.cases[caseId];
-  if (!expectedCase) return base;
-
-  const now = Date.now();
-  const eventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(database, `days/${base.selectedCenterId}/${session.date}`);
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      if (!currentValue) return;
-
-      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
-      const current = remoteCases[caseId];
-      if (
-        !current ||
-        current.centerId !== base.selectedCenterId ||
-        current.sessionId !== session.sessionId ||
-        current.assignedWindowId !== expectedCase.assignedWindowId ||
-        current.assignedOperatorId !== role ||
-        current.currentState !== "called_to_window"
-      ) {
-        return;
-      }
-
-      const nextCase: CaseRecord = {
-        ...current,
-        currentState: "in_document_validation",
-        documentValidationStartedAt: now,
-        updatedAt: now,
-      };
-      const validationEvent: TraceEvent = {
-        eventId,
-        centerId: current.centerId,
-        sessionId: current.sessionId,
-        caseId,
-        actorRole: role,
-        actorId: role,
-        action: "validation_started",
-        fromState: current.currentState,
-        toState: nextCase.currentState,
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentValue,
-        cases: {
-          ...remoteCases,
-          [caseId]: nextCase,
-        },
-        events: {
-          ...collectionRecord<TraceEvent>(currentValue.events),
-          [eventId]: validationEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
-
-  if (!result.committed) return base;
-
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedCase = committedDay?.cases?.[caseId];
-  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
-  if (!committedCase || !committedEvent) return base;
-
-  await syncPublicCaseProjection(
-    committedCase,
-    getCurrentCenter(base),
-    session.date,
-  );
-
-  return {
-    ...base,
-    cases: { ...base.cases, [caseId]: committedCase },
-    events: [committedEvent, ...base.events],
-  };
+  const response = await startWindowValidationCallable(data.selectedCenterId, caseId);
+  if (!response.ok || !response.caseRecord || !response.event) {
+    throw new Error(response.outcome);
+  }
+  return mergeRealtimePriorityCase(data, response.caseRecord, response.event);
 };
 
 export const markWindowNoShow = (data: AppData, caseId: string, role: Role): AppData => {
@@ -1138,75 +1066,11 @@ export const markWindowNoShowRealtime = async (
 ): Promise<AppData> => {
   if (!database) return markWindowNoShow(data, caseId, role);
 
-  const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const now = Date.now();
-  const eventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(database, `days/${base.selectedCenterId}/${session.date}`);
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      if (!currentValue) return;
-      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
-      const current = remoteCases[caseId];
-      if (
-        !current ||
-        current.centerId !== base.selectedCenterId ||
-        current.sessionId !== session.sessionId ||
-        current.assignedOperatorId !== role ||
-        current.currentState !== "called_to_window"
-      ) {
-        return;
-      }
-
-      const nextCase: CaseRecord = {
-        ...current,
-        currentState: "no_show",
-        updatedAt: now,
-      };
-      const noShowEvent: TraceEvent = {
-        eventId,
-        centerId: current.centerId,
-        sessionId: current.sessionId,
-        caseId,
-        actorRole: role,
-        actorId: role,
-        action: "window_no_show",
-        fromState: current.currentState,
-        toState: nextCase.currentState,
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentValue,
-        cases: { ...remoteCases, [caseId]: nextCase },
-        events: {
-          ...collectionRecord<TraceEvent>(currentValue.events),
-          [eventId]: noShowEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
-
-  if (!result.committed) return base;
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedCase = committedDay?.cases?.[caseId];
-  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
-  if (!committedCase || !committedEvent) return base;
-
-  await syncPublicCaseProjection(
-    committedCase,
-    getCurrentCenter(base),
-    session.date,
-  );
-
-  return {
-    ...base,
-    cases: { ...base.cases, [caseId]: committedCase },
-    events: [committedEvent, ...base.events],
-  };
+  const response = await markWindowCaseNoShowCallable(data.selectedCenterId, caseId);
+  if (!response.ok || !response.caseRecord || !response.event) {
+    throw new Error(response.outcome);
+  }
+  return mergeRealtimePriorityCase(data, response.caseRecord, response.event);
 };
 
 export const markCaseAsPriority = (
