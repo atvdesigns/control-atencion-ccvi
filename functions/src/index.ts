@@ -71,6 +71,7 @@ interface WindowCase {
   arrivalAt: number;
   calledToWindowAt: number | null;
   updatedAt: number;
+  operationalReassignmentQueuedAt?: number | null;
   [key: string]: unknown;
 }
 
@@ -140,6 +141,18 @@ interface WindowTransitionContext {
   eventId: string;
 }
 
+interface ReassignWindowCaseContext {
+  centerId: string;
+  sessionId: string;
+  caseId: string;
+  sourceWindow: CenterWindow;
+  destinationWindow: CenterWindow;
+  role: WindowRole;
+  uid: string;
+  timestamp: number;
+  eventId: string;
+}
+
 let priorityArrivalAfterCommitTestHook: (() => void) | null = null;
 let priorityArrivalBeforeTransactionTestHook: (() => void) | null = null;
 export const setPriorityArrivalAfterCommitTestHook = (hook: (() => void) | null) => {
@@ -195,6 +208,14 @@ export const selectNextWindowCase = (
       a.arrivalAt - b.arrivalAt ||
       a.globalArrivalSequence - b.globalArrivalSequence ||
       a.caseId.localeCompare(b.caseId));
+  const reassigned = eligible
+    .filter((caseItem) => typeof caseItem.operationalReassignmentQueuedAt === "number")
+    .sort((a, b) =>
+      (a.operationalReassignmentQueuedAt as number) - (b.operationalReassignmentQueuedAt as number) ||
+      a.arrivalAt - b.arrivalAt ||
+      a.globalArrivalSequence - b.globalArrivalSequence ||
+      a.caseId.localeCompare(b.caseId));
+  if (reassigned.length > 0) return reassigned[0];
   const priority = eligible.filter((caseItem) => caseItem.isPriority);
   const regular = eligible.filter((caseItem) => !caseItem.isPriority);
   if (priority.length > 0 && (regular.length === 0 || consecutivePriorityCases < 2)) {
@@ -252,10 +273,12 @@ export const applyCallNextWindowMutation = (
     currentState: "called_to_window",
     calledToWindowAt: context.timestamp,
     updatedAt: context.timestamp,
+    operationalReassignmentQueuedAt: null,
   };
+  const selectedForTransfer = typeof next.operationalReassignmentQueuedAt === "number";
   const day: WindowDay = {
     ...currentDay,
-    metadata: {
+    metadata: selectedForTransfer ? metadata : {
       ...metadata,
       consecutivePriorityCasesByWindow: {
         ...counters,
@@ -280,7 +303,7 @@ export const applyCallNextWindowMutation = (
       },
     },
   };
-  return { status: "called" as const, day, caseId: next.caseId };
+  return { status: "called" as const, day, caseId: next.caseId, selectedForTransfer };
 };
 
 export const runCallNextWindowTransaction = async (
@@ -665,6 +688,132 @@ export const completeWindowTransitionAfterCommit = async (
       event: committed.event,
     };
   }
+};
+
+export const applyReassignWindowCaseMutation = (
+  currentDay: WindowDay | null,
+  context: ReassignWindowCaseContext,
+) => {
+  if (!currentDay) return { status: "case_not_found" as const, day: undefined, caseRecord: null, event: null };
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const current = cases[context.caseId];
+  if (!current) return { status: "case_not_found" as const, day: undefined, caseRecord: null, event: null };
+  if (context.sourceWindow.windowId === context.destinationWindow.windowId) {
+    return { status: "invalid_destination" as const, day: undefined, caseRecord: null, event: null };
+  }
+  if (current.centerId !== context.centerId || current.sessionId !== context.sessionId ||
+    current.assignedWindowId !== context.sourceWindow.windowId ||
+    current.serviceType !== context.sourceWindow.serviceType || current.assignedOperatorId !== context.role) {
+    return { status: "unauthorized" as const, day: undefined, caseRecord: null, event: null };
+  }
+  if (current.currentState !== "in_document_validation") {
+    return { status: "invalid_case_state" as const, day: undefined, caseRecord: null, event: null };
+  }
+  const nextCase: WindowCase = {
+    ...current,
+    serviceType: context.destinationWindow.serviceType,
+    serviceLabel: context.destinationWindow.serviceLabel,
+    validationLevel: context.destinationWindow.validationLevel,
+    assignedWindowId: context.destinationWindow.windowId,
+    assignedWindowNumber: context.destinationWindow.windowNumber,
+    assignedOperatorId: null,
+    currentState: "waiting_document_validation",
+    calledToWindowAt: null,
+    documentValidationStartedAt: null,
+    operationalReassignmentQueuedAt: context.timestamp,
+    updatedAt: context.timestamp,
+  };
+  const event = {
+    eventId: context.eventId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: context.caseId, actorRole: context.role, actorId: context.uid,
+    action: "case_reassigned", fromState: current.currentState,
+    toState: "waiting_document_validation", timestamp: context.timestamp, optionalNote: null,
+    sourceWindowId: context.sourceWindow.windowId,
+    destinationWindowId: context.destinationWindow.windowId,
+    sourceWindowNumber: context.sourceWindow.windowNumber,
+    destinationWindowNumber: context.destinationWindow.windowNumber,
+  };
+  return {
+    status: "reassigned" as const,
+    caseRecord: nextCase,
+    event,
+    day: {
+      ...currentDay,
+      cases: { ...cases, [context.caseId]: nextCase },
+      events: { ...recordOf(currentDay.events), [context.eventId]: event },
+    } as WindowDay,
+  };
+};
+
+export const runReassignWindowCaseTransaction = async (
+  subscribeToAuthoritativeDay: (
+    onValue: (exists: boolean) => void,
+    onError: (error: unknown) => void,
+  ) => () => void,
+  transact: (
+    update: (currentDay: WindowDay | null) => WindowDay | undefined,
+  ) => Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: ReassignWindowCaseContext,
+) => {
+  let detach = () => {};
+  try {
+    const exists = await new Promise<boolean>((resolve, reject) => {
+      detach = subscribeToAuthoritativeDay(resolve, reject);
+    });
+    if (!exists) return { status: "case_not_found" as const, caseRecord: null, event: null };
+    const holder: { value: ReturnType<typeof applyReassignWindowCaseMutation> | null } = { value: null };
+    const transaction = await transact((day) => {
+      holder.value = applyReassignWindowCaseMutation(day, context);
+      return holder.value.day;
+    });
+    const outcome = holder.value;
+    if (transaction.committed && outcome?.status === "reassigned") {
+      return { status: outcome.status, caseRecord: outcome.caseRecord, event: outcome.event };
+    }
+    return { status: outcome?.status ?? "conflict" as const, caseRecord: null, event: null };
+  } finally {
+    detach();
+  }
+};
+
+export const completeReassignWindowCaseAfterCommit = async (
+  committed: { caseRecord: WindowCase; event: unknown },
+  syncProjection: () => Promise<void>,
+) => {
+  try {
+    await syncProjection();
+    return { ok: true, outcome: "reassigned" as const, ...committed };
+  } catch {
+    return { ok: true, outcome: "reassigned_projection_failed" as const, ...committed };
+  }
+};
+
+export const executeReassignWindowCase = async (
+  subscribeToAuthoritativeDay: (
+    onValue: (exists: boolean) => void,
+    onError: (error: unknown) => void,
+  ) => () => void,
+  transact: (
+    update: (currentDay: WindowDay | null) => WindowDay | undefined,
+  ) => Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: ReassignWindowCaseContext,
+  syncProjection: (committed: { caseRecord: WindowCase; event: unknown }) => Promise<void>,
+  onCommitted: (committed: { caseRecord: WindowCase; event: unknown }) => void = () => {},
+) => {
+  const result = await runReassignWindowCaseTransaction(
+    subscribeToAuthoritativeDay,
+    transact,
+    context,
+  );
+  if (result.status !== "reassigned") {
+    return { ok: false, outcome: result.status };
+  }
+  const committed = { caseRecord: result.caseRecord as WindowCase, event: result.event };
+  onCommitted(committed);
+  return completeReassignWindowCaseAfterCommit(
+    committed,
+    () => syncProjection(committed),
+  );
 };
 
 const parseInput = (value: unknown): KioskArrivalInput => {
@@ -1337,6 +1486,107 @@ const createWindowTransitionCallable = (operation: WindowTransitionOperation) =>
 
 export const startWindowValidation = createWindowTransitionCallable("start");
 export const markWindowCaseNoShow = createWindowTransitionCallable("no_show");
+
+export const reassignWindowCase = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    const startedAt = Date.now();
+    let centerForLog: string | null = null;
+    let windowForLog: number | null = null;
+    let committed: { caseRecord: WindowCase; event: unknown } | null = null;
+    const finish = (outcome: string) => {
+      try {
+        console.info({ operation: "reassignWindowCase", outcome, center: centerForLog,
+          window: windowForLog, transactionCommitted: Boolean(committed), durationMs: Date.now() - startedAt });
+      } catch { /* logging cannot alter the outcome */ }
+    };
+    try {
+      if (!request.auth?.uid) { finish("unauthenticated"); return { ok: false, outcome: "unauthenticated" as const }; }
+      const input = request.data as Record<string, unknown> | null;
+      if (!input || Array.isArray(input) || Object.keys(input).length !== 3 ||
+        typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
+        typeof input.caseId !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(input.caseId) ||
+        typeof input.destinationWindowId !== "string" || !windowIdPattern.test(input.destinationWindowId)) {
+        finish("invalid_request"); return { ok: false, outcome: "invalid_request" as const };
+      }
+      const centerId = input.centerId;
+      const caseId = input.caseId;
+      const destinationWindowId = input.destinationWindowId;
+      const uid = request.auth.uid;
+      centerForLog = centerId;
+      const database = getDatabase();
+      const [profileSnapshot, centerSnapshot] = await Promise.all([
+        database.ref(`users/${uid}`).get(), database.ref(`centers/${centerId}`).get(),
+      ]);
+      if (!profileSnapshot.exists()) { finish("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      if (!centerSnapshot.exists()) { finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const profile = profileSnapshot.val() as UserProfile;
+      const center = centerSnapshot.val() as CenterConfig;
+      const windows = valuesOf(center.windows);
+      const sourceWindow = authorizePriorityWindow(profile, uid, centerId, windows);
+      if (profile.role === "operator-window-1") windowForLog = 1;
+      if (profile.role === "operator-window-2") windowForLog = 2;
+      if (!sourceWindow) { finish("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      if (center.centerId !== centerId || center.enabled !== true) {
+        finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const };
+      }
+      const destinationWindow = windows.find((item) => item.windowId === destinationWindowId);
+      if (!destinationWindow || destinationWindow.enabled !== true ||
+        !serviceTypes.includes(destinationWindow.serviceType) ||
+        typeof destinationWindow.serviceLabel !== "string" ||
+        !["enhanced", "standard"].includes(destinationWindow.validationLevel)) {
+        finish("invalid_destination"); return { ok: false, outcome: "invalid_destination" as const };
+      }
+      if (destinationWindow.windowId === sourceWindow.windowId) {
+        finish("invalid_destination"); return { ok: false, outcome: "invalid_destination" as const };
+      }
+      let dayId: string;
+      try { dayId = dateTimeInZone(new Date(), center.timezone).dayId; }
+      catch { finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const reference = database.ref(`days/${centerId}/${dayId}`);
+      const response = await executeReassignWindowCase(
+        (onValue, onError) => {
+          const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+          return () => reference.off("value", listener);
+        },
+        async (update) => {
+          const tx = await reference.transaction(update, undefined, false);
+          return { committed: tx.committed, value: tx.snapshot.val() as WindowDay | null };
+        },
+        {
+          centerId, sessionId: `${centerId}-${dayId}`, caseId, sourceWindow, destinationWindow,
+          role: profile.role as WindowRole, uid, timestamp: Date.now(), eventId: randomUUID(),
+        },
+        async (knownCommitted) => {
+          const current = knownCommitted.caseRecord;
+          const destination = `Ventanilla ${current.assignedWindowNumber}`;
+          await database.ref().update({
+            [`public/turns/${current.publicToken}`]: {
+              centerId, publicCode: current.publicCode, isPriority: current.isPriority,
+              status: "Prepare su documentación", serviceType: current.serviceType,
+              serviceLabel: current.serviceLabel, destination, updatedAt: current.updatedAt,
+              requirements: publicRequirements(center, current.serviceType),
+              paymentMethods: publicPaymentMethods(center),
+            },
+            [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: null,
+            [`public/displays/${centerId}/${dayId}/${caseId}`]: null,
+          });
+        },
+        (knownCommitted) => { committed = knownCommitted; },
+      );
+      finish(response.outcome);
+      return response;
+    } catch {
+      if (committed) {
+        const response = await completeReassignWindowCaseAfterCommit(committed, async () => { throw new Error("post_commit"); });
+        finish(response.outcome);
+        return response;
+      }
+      finish("internal_error");
+      return { ok: false, outcome: "internal_error" as const };
+    }
+  },
+);
 
 export const callNextWindowCase = onCall(
   { region: "us-central1", enforceAppCheck: false },

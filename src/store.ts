@@ -21,6 +21,7 @@ import {
   callNextWindowCaseCallable,
   createPriorityArrivalCallable,
   markWindowCaseNoShowCallable,
+  reassignWindowCaseCallable,
   startWindowValidationCallable,
   updateCasePriorityCallable,
   type CallNextWindowCaseOutcome,
@@ -1360,88 +1361,12 @@ export const reassignCaseRealtime = async (
   role: Role,
 ): Promise<AppData> => {
   if (!database) return reassignCase(data, caseId, targetWindowId, role);
-
   const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const targetWindow = getCurrentCenter(base).windows.find(
-    (windowItem) => windowItem.windowId === targetWindowId && windowItem.enabled,
-  );
-  if (!targetWindow) return base;
-
-  const now = Date.now();
-  const eventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(database, `days/${base.selectedCenterId}/${session.date}`);
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      if (!currentValue) return;
-      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
-      const current = remoteCases[caseId];
-      if (
-        !current ||
-        current.centerId !== base.selectedCenterId ||
-        current.sessionId !== session.sessionId ||
-        current.assignedOperatorId !== role ||
-        current.currentState !== "in_document_validation"
-      ) {
-        return;
-      }
-
-      const nextCase: CaseRecord = {
-        ...current,
-        serviceType: targetWindow.serviceType,
-        serviceLabel: targetWindow.serviceLabel,
-        validationLevel: targetWindow.validationLevel,
-        assignedWindowId: targetWindow.windowId,
-        assignedWindowNumber: targetWindow.windowNumber,
-        currentState: "waiting_document_validation",
-        calledToWindowAt: null,
-        documentValidationStartedAt: null,
-        updatedAt: now,
-      };
-      const reassignmentEvent: TraceEvent = {
-        eventId,
-        centerId: current.centerId,
-        sessionId: current.sessionId,
-        caseId,
-        actorRole: role,
-        actorId: role,
-        action: "case_reassigned",
-        fromState: current.currentState,
-        toState: nextCase.currentState,
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentValue,
-        cases: { ...remoteCases, [caseId]: nextCase },
-        events: {
-          ...collectionRecord<TraceEvent>(currentValue.events),
-          [eventId]: reassignmentEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
-
-  if (!result.committed) return base;
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedCase = committedDay?.cases?.[caseId];
-  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
-  if (!committedCase || !committedEvent) return base;
-
-  await syncPublicCaseProjection(
-    committedCase,
-    getCurrentCenter(base),
-    session.date,
-  );
-
-  return {
-    ...base,
-    cases: { ...base.cases, [caseId]: committedCase },
-    events: [committedEvent, ...base.events],
-  };
+  const response = await reassignWindowCaseCallable(base.selectedCenterId, caseId, targetWindowId);
+  if (!response.ok || !response.caseRecord || !response.event) {
+    throw new Error(response.outcome);
+  }
+  return mergeRealtimePriorityCase(base, response.caseRecord, response.event);
 };
 
 export const finishDocumentValidation = (

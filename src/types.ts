@@ -219,6 +219,7 @@ export interface CaseRecord {
   commissionRateApplied?: number;
   commissionAmount?: number;
   completedAt: number | null;
+  operationalReassignmentQueuedAt?: number | null;
   updatedAt: number;
 }
 

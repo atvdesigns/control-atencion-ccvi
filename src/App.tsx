@@ -2144,14 +2144,20 @@ const OperatorView = ({
                           key={windowItem.windowId}
                           variant="outlined"
                           onClick={async () => {
-                            const next = await reassignCaseRealtime(
-                              data,
-                              activeCase.caseId,
-                              windowItem.windowId,
-                              role,
-                            );
-                            setData(() => next);
+                            await executeCallNextWindow({
+                              pendingRef: windowTransitionPendingRef,
+                              setLoading: setIsWindowTransitionPending,
+                              request: () => reassignCaseRealtime(
+                                data,
+                                activeCase.caseId,
+                                windowItem.windowId,
+                                role,
+                              ),
+                              onResult: (next) => setData(() => next),
+                              onError: () => onFeedback("No pudimos reasignar el turno. Intente nuevamente."),
+                            });
                           }}
+                          disabled={isWindowTransitionPending}
                           sx={{
                             color: ccviPalette.text,
                             borderColor: "rgba(17, 27, 50, 0.34)",

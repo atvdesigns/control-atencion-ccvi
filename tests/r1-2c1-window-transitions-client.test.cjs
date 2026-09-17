@@ -23,8 +23,8 @@ test("client accepts committed projection-warning outcomes", () => {
 
 test("both buttons share a synchronous pending guard", () => {
   assert.match(app, /windowTransitionPendingRef/);
-  assert.equal(app.split("disabled={isWindowTransitionPending}").length - 1, 2);
-  assert.equal(app.split("pendingRef: windowTransitionPendingRef").length - 1, 2);
+  assert.equal(app.split("disabled={isWindowTransitionPending}").length - 1, 3);
+  assert.equal(app.split("pendingRef: windowTransitionPendingRef").length - 1, 3);
 });
 
 test("controlled failures use existing safe operator feedback", () => {

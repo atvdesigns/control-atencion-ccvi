@@ -156,6 +156,26 @@ export interface WindowTransitionResponse {
   event?: TraceEvent;
 }
 
+export type ReassignWindowCaseOutcome =
+  | "reassigned"
+  | "reassigned_projection_failed"
+  | "case_not_found"
+  | "unauthenticated"
+  | "unauthorized"
+  | "invalid_request"
+  | "invalid_destination"
+  | "invalid_case_state"
+  | "conflict"
+  | "config_unavailable"
+  | "internal_error";
+
+export interface ReassignWindowCaseResponse {
+  ok: boolean;
+  outcome: ReassignWindowCaseOutcome;
+  caseRecord?: CaseRecord;
+  event?: TraceEvent;
+}
+
 export interface PublicKioskConfig {
   centerId: string;
   enabled: boolean;
@@ -292,6 +312,31 @@ export const startWindowValidationCallable = (centerId: string, caseId: string) 
 
 export const markWindowCaseNoShowCallable = (centerId: string, caseId: string) =>
   windowTransitionCallable("markWindowCaseNoShow", centerId, caseId);
+
+export const reassignWindowCaseCallable = async (
+  centerId: string,
+  caseId: string,
+  destinationWindowId: string,
+): Promise<ReassignWindowCaseResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<
+    { centerId: string; caseId: string; destinationWindowId: string },
+    ReassignWindowCaseResponse
+  >(functions, "reassignWindowCase");
+  const result = await callable({ centerId, caseId, destinationWindowId });
+  const outcomes: ReassignWindowCaseOutcome[] = [
+    "reassigned", "reassigned_projection_failed", "case_not_found", "unauthenticated",
+    "unauthorized", "invalid_request", "invalid_destination", "invalid_case_state",
+    "conflict", "config_unavailable", "internal_error",
+  ];
+  if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome)) {
+    throw new Error("INVALID_REASSIGN_WINDOW_CASE_RESPONSE");
+  }
+  if (result.data.ok && (!result.data.caseRecord || !result.data.event)) {
+    throw new Error("INVALID_REASSIGN_WINDOW_CASE_RESPONSE");
+  }
+  return result.data;
+};
 
 const configuredUsernameDomain =
   import.meta.env.VITE_FIREBASE_USERNAME_DOMAIN?.trim().toLowerCase();
