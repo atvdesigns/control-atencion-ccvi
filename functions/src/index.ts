@@ -74,6 +74,16 @@ interface WindowDay {
   [key: string]: unknown;
 }
 
+interface CallNextWindowContext {
+  centerId: string;
+  sessionId: string;
+  windowId: string;
+  role: WindowRole;
+  uid: string;
+  timestamp: number;
+  eventId: string;
+}
+
 const serviceTypes: ServiceType[] = ["representation", "vehicle_owner"];
 const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const centerIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
@@ -130,15 +140,7 @@ export const authorizedWindowId = (
 
 export const applyCallNextWindowMutation = (
   currentDay: WindowDay | null,
-  context: {
-    centerId: string;
-    sessionId: string;
-    windowId: string;
-    role: WindowRole;
-    uid: string;
-    timestamp: number;
-    eventId: string;
-  },
+  context: CallNextWindowContext,
 ) => {
   if (!currentDay) return { status: "no-eligible-case" as const, day: undefined, caseId: null };
   const cases = recordOf<WindowCase>(currentDay.cases);
@@ -198,6 +200,77 @@ export const applyCallNextWindowMutation = (
     },
   };
   return { status: "called" as const, day, caseId: next.caseId };
+};
+
+export const runCallNextWindowTransaction = async (
+  loadAuthoritativeDay: () => Promise<WindowDay | null>,
+  transact: (
+    update: (currentDay: WindowDay | null) => WindowDay | undefined,
+  ) => Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: CallNextWindowContext,
+) => {
+  if (!await loadAuthoritativeDay()) {
+    return {
+      status: "no-eligible-case" as const,
+      caseId: null,
+      committedDay: null,
+    };
+  }
+
+  // RTDB may invoke the first transaction callback with null before its local
+  // cache has received the existing server value. Never treat that value as an
+  // authoritative empty queue and never repopulate it from the preload.
+  const maximumAttempts = 3;
+  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+    const outcomeHolder: {
+      value: ReturnType<typeof applyCallNextWindowMutation> | null;
+    } = { value: null };
+    let sawTransientNull = false;
+    const transaction = await transact((currentDay) => {
+      if (!currentDay) {
+        sawTransientNull = true;
+        outcomeHolder.value = null;
+        return undefined;
+      }
+      const mutation = applyCallNextWindowMutation(currentDay, context);
+      outcomeHolder.value = mutation;
+      return mutation.day;
+    });
+    const mutationOutcome = outcomeHolder.value;
+
+    if (transaction.committed) {
+      if (mutationOutcome?.status !== "called" || !mutationOutcome.caseId) {
+        throw new Error("CALL_NEXT_TRANSACTION_INVALID_COMMIT");
+      }
+      return {
+        status: mutationOutcome.status,
+        caseId: mutationOutcome.caseId,
+        committedDay: transaction.value,
+      };
+    }
+
+    if (mutationOutcome) {
+      if (mutationOutcome.status === "called") {
+        throw new Error("CALL_NEXT_TRANSACTION_NOT_COMMITTED");
+      }
+      return {
+        status: mutationOutcome.status,
+        caseId: mutationOutcome.caseId,
+        committedDay: null,
+      };
+    }
+
+    if (!sawTransientNull) throw new Error("CALL_NEXT_TRANSACTION_ABORTED");
+    if (!await loadAuthoritativeDay()) {
+      return {
+        status: "no-eligible-case" as const,
+        caseId: null,
+        committedDay: null,
+      };
+    }
+  }
+
+  throw new Error("CALL_NEXT_TRANSACTION_STATE_UNAVAILABLE");
 };
 
 export const callNextWindowResponse = (
@@ -566,14 +639,23 @@ export const callNextWindowCase = onCall(
       const sessionId = `${centerId}-${dayId}`;
       const eventId = randomUUID();
       const dayReference = database.ref(`days/${centerId}/${dayId}`);
-      const mutationOutcome: {
-        status: "called" | "no-eligible-case" | "active-case";
-        caseId: string | null;
-      } = { status: "no-eligible-case", caseId: null };
-
-      const transaction = await dayReference.transaction(
-        (currentValue) => {
-          const mutation = applyCallNextWindowMutation(currentValue as WindowDay | null, {
+      const mutationOutcome = await runCallNextWindowTransaction(
+        async () => {
+          const snapshot = await dayReference.get();
+          return snapshot.exists() ? snapshot.val() as WindowDay : null;
+        },
+        async (update) => {
+          const transaction = await dayReference.transaction(
+            (currentValue) => update(currentValue as WindowDay | null),
+            undefined,
+            false,
+          );
+          return {
+            committed: transaction.committed,
+            value: transaction.snapshot.val() as WindowDay | null,
+          };
+        },
+        {
             centerId,
             sessionId,
             windowId,
@@ -581,24 +663,15 @@ export const callNextWindowCase = onCall(
             uid,
             timestamp,
             eventId,
-          });
-          mutationOutcome.status = mutation.status;
-          mutationOutcome.caseId = mutation.caseId;
-          return mutation.day;
         },
-        undefined,
-        false,
       );
 
-      if (!transaction.committed || mutationOutcome.status !== "called" || !mutationOutcome.caseId) {
-        if (mutationOutcome.status === "called") {
-          throw new Error("CALL_NEXT_TRANSACTION_NOT_COMMITTED");
-        }
+      if (mutationOutcome.status !== "called" || !mutationOutcome.caseId) {
         const response = callNextWindowResponse(mutationOutcome.status);
         logFinalOutcome(response.outcome);
         return response;
       }
-      const committedCase = transaction.snapshot.child(`cases/${mutationOutcome.caseId}`).val() as WindowCase | null;
+      const committedCase = mutationOutcome.committedDay?.cases?.[mutationOutcome.caseId] ?? null;
       if (!committedCase) throw new Error("COMMITTED_CASE_NOT_FOUND");
 
       const destination = `Ventanilla ${committedCase.assignedWindowNumber}`;

@@ -30,6 +30,7 @@ const {
   authorizedWindowId,
   selectNextWindowCase,
   applyCallNextWindowMutation,
+  runCallNextWindowTransaction,
   callNextWindowResponse,
 } = exportsFromFunctions;
 const centerId = "ccvi-san-bernardo";
@@ -171,6 +172,159 @@ test("no eligible case returns a safe no-op", () => {
   });
   assert.equal(result.status, "no-eligible-case");
   assert.equal(result.day, undefined);
+});
+
+const transactionContext = (overrides = {}) => ({
+  centerId,
+  sessionId,
+  windowId,
+  role: "operator-window-1",
+  uid: "user-1",
+  timestamp: 123456,
+  eventId: "event-transaction",
+  ...overrides,
+});
+const populatedDay = (...cases) => ({
+  metadata: { consecutivePriorityCasesByWindow: { [windowId]: 0, "window-2": 0 } },
+  cases: Object.fromEntries(cases.map((item) => [item.caseId, item])),
+  events: {},
+});
+const transactionOver = (readCurrent, writeCurrent) => async (update) => {
+  const next = update(readCurrent());
+  if (next === undefined) return { committed: false, value: readCurrent() };
+  writeCurrent(next);
+  return { committed: true, value: readCurrent() };
+};
+
+test("genuinely nonexistent authoritative day returns no eligible", async () => {
+  let transactions = 0;
+  const result = await runCallNextWindowTransaction(
+    async () => null,
+    async () => { transactions += 1; throw new Error("transaction must not start"); },
+    transactionContext(),
+  );
+  assert.equal(result.status, "no-eligible-case");
+  assert.equal(transactions, 0);
+});
+
+test("existing authoritative day with an empty queue returns no eligible", async () => {
+  let current = populatedDay();
+  const result = await runCallNextWindowTransaction(
+    async () => current,
+    transactionOver(() => current, (next) => { current = next; }),
+    transactionContext(),
+  );
+  assert.equal(result.status, "no-eligible-case");
+});
+
+test("populated authoritative day calls an eligible case", async () => {
+  let current = populatedDay(makeCase("eligible", false, 1));
+  const result = await runCallNextWindowTransaction(
+    async () => current,
+    transactionOver(() => current, (next) => { current = next; }),
+    transactionContext(),
+  );
+  assert.equal(result.status, "called");
+  assert.equal(result.caseId, "eligible");
+  assert.equal(current.cases.eligible.currentState, "called_to_window");
+});
+
+test("initial transaction null is not classified as no eligible", async () => {
+  let current = populatedDay(makeCase("eligible-after-null", false, 1));
+  let transactionAttempts = 0;
+  const result = await runCallNextWindowTransaction(
+    async () => current,
+    async (update) => {
+      transactionAttempts += 1;
+      if (transactionAttempts === 1) {
+        assert.equal(update(null), undefined);
+        return { committed: false, value: null };
+      }
+      const next = update(current);
+      current = next;
+      return { committed: true, value: current };
+    },
+    transactionContext(),
+  );
+  assert.equal(result.status, "called");
+  assert.equal(result.caseId, "eligible-after-null");
+  assert.equal(transactionAttempts, 2);
+});
+
+test("day deleted after preload is not recreated from preloaded data", async () => {
+  const preloaded = populatedDay(makeCase("deleted", false, 1));
+  let loads = 0;
+  const result = await runCallNextWindowTransaction(
+    async () => (loads++ === 0 ? preloaded : null),
+    async (update) => {
+      assert.equal(update(null), undefined);
+      return { committed: false, value: null };
+    },
+    transactionContext(),
+  );
+  assert.equal(result.status, "no-eligible-case");
+  assert.equal(result.committedDay, null);
+});
+
+test("simultaneous calls never commit the same case", async () => {
+  let current = populatedDay(
+    makeCase("first", false, 1),
+    makeCase("second", false, 2),
+  );
+  let transactionQueue = Promise.resolve();
+  const transact = (update) => {
+    const result = transactionQueue.then(() => {
+      const next = update(current);
+      if (next === undefined) return { committed: false, value: current };
+      current = next;
+      return { committed: true, value: current };
+    });
+    transactionQueue = result.then(() => undefined);
+    return result;
+  };
+  const results = await Promise.all([
+    runCallNextWindowTransaction(async () => current, transact, transactionContext({ eventId: "event-a" })),
+    runCallNextWindowTransaction(async () => current, transact, transactionContext({ eventId: "event-b" })),
+  ]);
+  const called = results.filter((result) => result.status === "called");
+  assert.equal(called.length, 1);
+  assert.equal(new Set(called.map((result) => result.caseId)).size, called.length);
+});
+
+test("transaction retry recomputes selection from current state", async () => {
+  const first = makeCase("first", false, 1);
+  const second = makeCase("second", false, 2);
+  let current = populatedDay(first, second);
+  const result = await runCallNextWindowTransaction(
+    async () => current,
+    async (update) => {
+      const staleResult = update(current);
+      assert.equal(staleResult.cases.first.currentState, "called_to_window");
+      current = populatedDay({ ...first, currentState: "completed", updatedAt: 2 }, second);
+      const retriedResult = update(current);
+      current = retriedResult;
+      return { committed: true, value: current };
+    },
+    transactionContext(),
+  );
+  assert.equal(result.caseId, "second");
+  assert.equal(current.cases.second.currentState, "called_to_window");
+});
+
+test("Window 2 transaction only selects its own queue", async () => {
+  const windowTwoCase = makeCase("window-two", false, 1, {
+    assignedWindowId: "window-2",
+    assignedWindowNumber: 2,
+    publicCode: "V2-01",
+  });
+  let current = populatedDay(makeCase("window-one", false, 1), windowTwoCase);
+  const result = await runCallNextWindowTransaction(
+    async () => current,
+    transactionOver(() => current, (next) => { current = next; }),
+    transactionContext({ windowId: "window-2", role: "operator-window-2" }),
+  );
+  assert.equal(result.caseId, "window-two");
+  assert.equal(current.cases["window-one"].currentState, "waiting_document_validation");
 });
 
 test("called maps to the explicit client outcome contract", () => {
