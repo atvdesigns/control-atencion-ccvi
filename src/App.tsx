@@ -2504,20 +2504,24 @@ const OperatorView = ({
               const priorityCaseId = priorityDialogCase.caseId;
               const priorityWasSet = priorityDialogCase.isPriority;
               closePriorityDialog();
-              const next = priorityWasSet
-                ? await updateCasePriorityRealtime(
-                    data,
-                    priorityCaseId,
-                    selectedPriorityType,
-                    role,
-                  )
-                : await markCaseAsPriorityRealtime(
-                    data,
-                    priorityCaseId,
-                    selectedPriorityType,
-                    role,
-                  );
-              setData(() => next);
+              try {
+                const next = priorityWasSet
+                  ? await updateCasePriorityRealtime(
+                      data,
+                      priorityCaseId,
+                      selectedPriorityType,
+                      role,
+                    )
+                  : await markCaseAsPriorityRealtime(
+                      data,
+                      priorityCaseId,
+                      selectedPriorityType,
+                      role,
+                    );
+                setData(() => next);
+              } catch {
+                onFeedback("No pudimos actualizar la atención preferencial. Intente nuevamente.");
+              }
             }}
           >
             {priorityCreationOpen
@@ -2549,12 +2553,16 @@ const OperatorView = ({
               if (!priorityRemovalCase) return;
               const priorityCaseId = priorityRemovalCase.caseId;
               setPriorityRemovalCase(null);
-              const next = await removeCasePriorityRealtime(
-                data,
-                priorityCaseId,
-                role,
-              );
-              setData(() => next);
+              try {
+                const next = await removeCasePriorityRealtime(
+                  data,
+                  priorityCaseId,
+                  role,
+                );
+                setData(() => next);
+              } catch {
+                onFeedback("No pudimos actualizar la atención preferencial. Intente nuevamente.");
+              }
             }}
           >
             Quitar atención preferencial

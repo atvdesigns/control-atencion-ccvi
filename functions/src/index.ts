@@ -111,6 +111,21 @@ interface CommittedPriorityArrival {
   events: [unknown, unknown];
 }
 
+type PriorityMutationOperation = "set" | "change" | "remove";
+interface PriorityMutationContext {
+  centerId: string;
+  sessionId: string;
+  caseId: string;
+  windowId: string;
+  serviceType: ServiceType;
+  role: WindowRole;
+  uid: string;
+  operation: PriorityMutationOperation;
+  priorityType: PriorityType | null;
+  timestamp: number;
+  eventId: string;
+}
+
 let priorityArrivalAfterCommitTestHook: (() => void) | null = null;
 let priorityArrivalBeforeTransactionTestHook: (() => void) | null = null;
 export const setPriorityArrivalAfterCommitTestHook = (hook: (() => void) | null) => {
@@ -470,6 +485,82 @@ export const completePriorityArrivalAfterCommit = async (
     return priorityCreatedResponse(committed, "created");
   } catch {
     return priorityCreatedResponse(committed, "created_but_projection_sync_failed");
+  }
+};
+
+export const applyExistingCasePriorityMutation = (
+  currentDay: WindowDay | null,
+  context: PriorityMutationContext,
+) => {
+  if (!currentDay) return { status: "case_not_found" as const, day: undefined, caseRecord: null, event: null };
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const current = cases[context.caseId];
+  if (!current) return { status: "case_not_found" as const, day: undefined, caseRecord: null, event: null };
+  if (current.centerId !== context.centerId || current.sessionId !== context.sessionId ||
+    current.assignedWindowId !== context.windowId || current.serviceType !== context.serviceType) {
+    return { status: "unauthorized" as const, day: undefined, caseRecord: null, event: null };
+  }
+  if (!["waiting_document_validation", "called_to_window", "in_document_validation"].includes(current.currentState)) {
+    return { status: "invalid_case_state" as const, day: undefined, caseRecord: null, event: null };
+  }
+  if ((context.operation === "set" && current.isPriority) ||
+    (context.operation === "change" && (!current.isPriority || current.priorityType === context.priorityType)) ||
+    (context.operation === "remove" && !current.isPriority)) {
+    return { status: "conflict" as const, day: undefined, caseRecord: null, event: null };
+  }
+  const nextCase: WindowCase = {
+    ...current,
+    isPriority: context.operation !== "remove",
+    priorityType: context.operation === "remove" ? null : context.priorityType,
+  };
+  const action = context.operation === "set" ? "priority_created" :
+    context.operation === "change" ? "priority_updated" : "priority_removed";
+  const event = {
+    eventId: context.eventId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: context.caseId, actorRole: context.role, actorId: context.uid, action,
+    fromState: current.currentState, toState: current.currentState, timestamp: context.timestamp,
+    optionalNote: context.operation === "remove" ? (current.priorityType ?? null) : context.priorityType,
+  };
+  return {
+    status: context.operation === "remove" ? "removed" as const : "updated" as const,
+    caseRecord: nextCase,
+    event,
+    day: {
+      ...currentDay,
+      cases: { ...cases, [context.caseId]: nextCase },
+      events: { ...recordOf(currentDay.events), [context.eventId]: event },
+    } as WindowDay,
+  };
+};
+
+export const runExistingCasePriorityTransaction = async (
+  subscribeToAuthoritativeDay: (
+    onValue: (exists: boolean) => void,
+    onError: (error: unknown) => void,
+  ) => () => void,
+  transact: (
+    update: (currentDay: WindowDay | null) => WindowDay | undefined,
+  ) => Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: PriorityMutationContext,
+) => {
+  let detach = () => {};
+  try {
+    const exists = await new Promise<boolean>((resolve, reject) => {
+      detach = subscribeToAuthoritativeDay(resolve, reject);
+    });
+    if (!exists) return { status: "case_not_found" as const, caseRecord: null, event: null };
+    const holder: { value: ReturnType<typeof applyExistingCasePriorityMutation> | null } = { value: null };
+    const transaction = await transact((day) => {
+      holder.value = applyExistingCasePriorityMutation(day, context);
+      return holder.value.day;
+    });
+    const outcome = holder.value;
+    if (transaction.committed && outcome && (outcome.status === "updated" || outcome.status === "removed")) {
+      return { status: outcome.status, caseRecord: outcome.caseRecord, event: outcome.event };
+    }
+    return { status: outcome?.status ?? "conflict" as const, caseRecord: null, event: null };
+  } finally {
+    detach();
   }
 };
 
@@ -932,6 +1023,114 @@ export const createPriorityArrival = onCall(
       } catch {
         // The controlled client response remains authoritative.
       }
+      return { ok: false, outcome: "internal_error" as const };
+    }
+  },
+);
+
+export const updateCasePriority = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    const startedAt = Date.now();
+    let centerForLog: string | null = null;
+    let windowForLog: number | null = null;
+    let committed = false;
+    const finish = (outcome: string) => {
+      try {
+        console.info({ operation: "updateCasePriority", outcome, center: centerForLog,
+          window: windowForLog, transactionCommitted: committed, durationMs: Date.now() - startedAt });
+      } catch { /* logging cannot alter the outcome */ }
+    };
+    try {
+      if (!request.auth?.uid) { finish("unauthenticated"); return { ok: false, outcome: "unauthenticated" as const }; }
+      const input = request.data as Record<string, unknown> | null;
+      const operation = input?.operation;
+      const priorityType = input?.priorityType;
+      const expectedKeys = operation === "remove" ? 3 : 4;
+      if (!input || Array.isArray(input) || Object.keys(input).length !== expectedKeys ||
+        typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
+        typeof input.caseId !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(input.caseId) ||
+        !["set", "change", "remove"].includes(operation as string) ||
+        (operation === "remove" ? "priorityType" in input :
+          typeof priorityType !== "string" || !priorityTypes.includes(priorityType as PriorityType))) {
+        const invalidPriority = (operation === "set" || operation === "change") &&
+          (typeof priorityType !== "string" || !priorityTypes.includes(priorityType as PriorityType));
+        finish(invalidPriority ? "invalid_priority" : "invalid_operation");
+        return { ok: false, outcome: invalidPriority ? "invalid_priority" as const : "invalid_operation" as const };
+      }
+      const centerId = input.centerId;
+      const caseId = input.caseId;
+      centerForLog = centerId;
+      const database = getDatabase();
+      const [profileSnapshot, centerSnapshot] = await Promise.all([
+        database.ref(`users/${request.auth.uid}`).get(), database.ref(`centers/${centerId}`).get(),
+      ]);
+      if (!profileSnapshot.exists()) { finish("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      if (!centerSnapshot.exists()) { finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const profile = profileSnapshot.val() as UserProfile;
+      const center = centerSnapshot.val() as CenterConfig;
+      const windowItem = authorizePriorityWindow(profile, request.auth.uid, centerId, valuesOf(center.windows));
+      if (profile.role === "operator-window-1") windowForLog = 1;
+      if (profile.role === "operator-window-2") windowForLog = 2;
+      if (!windowItem) { finish("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      if (center.centerId !== centerId || center.enabled !== true) {
+        finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const };
+      }
+      let dayId: string;
+      try { dayId = dateTimeInZone(new Date(), center.timezone).dayId; }
+      catch { finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const timestamp = Date.now();
+      const context: PriorityMutationContext = {
+        centerId, sessionId: `${centerId}-${dayId}`, caseId, windowId: windowItem.windowId,
+        serviceType: windowItem.serviceType, role: profile.role as WindowRole, uid: request.auth.uid,
+        operation: operation as PriorityMutationOperation,
+        priorityType: operation === "remove" ? null : priorityType as PriorityType,
+        timestamp, eventId: randomUUID(),
+      };
+      const reference = database.ref(`days/${centerId}/${dayId}`);
+      const result = await runExistingCasePriorityTransaction(
+        (onValue, onError) => {
+          const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+          return () => reference.off("value", listener);
+        },
+        async (update) => {
+          const tx = await reference.transaction(update, undefined, false);
+          return { committed: tx.committed, value: tx.snapshot.val() as WindowDay | null };
+        },
+        context,
+      );
+      if (result.status !== "updated" && result.status !== "removed") {
+        finish(result.status);
+        return { ok: false, outcome: result.status };
+      }
+      committed = true;
+      const current = result.caseRecord as WindowCase;
+      const event = result.event;
+      try {
+        const status = current.currentState === "called_to_window" ? `Diríjase a Ventanilla ${current.assignedWindowNumber}` :
+          current.currentState === "in_document_validation" ? "Atención en ventanilla" : "Prepare su documentación";
+        const destination = `Ventanilla ${current.assignedWindowNumber}`;
+        await database.ref().update({
+          [`public/turns/${current.publicToken}`]: {
+            centerId, publicCode: current.publicCode, isPriority: current.isPriority, status,
+            serviceType: current.serviceType, serviceLabel: current.serviceLabel, destination,
+            updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
+            paymentMethods: publicPaymentMethods(center),
+          },
+          [`public/displays/${centerId}/${dayId}/cases/${caseId}`]:
+            current.currentState === "waiting_document_validation" ? null : {
+              publicCode: current.publicCode, isPriority: current.isPriority, status, destination,
+              updatedAt: current.updatedAt,
+            },
+        });
+      } catch {
+        finish(`${result.status}_projection_failed`);
+        return { ok: true, outcome: `${result.status}_projection_failed`, caseRecord: current, event };
+      }
+      finish(result.status);
+      return { ok: true, outcome: result.status, caseRecord: current, event };
+    } catch {
+      finish("internal_error");
       return { ok: false, outcome: "internal_error" as const };
     }
   },

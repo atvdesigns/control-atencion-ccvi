@@ -112,6 +112,29 @@ export interface CreatePriorityArrivalResponse {
   events?: TraceEvent[];
 }
 
+export type UpdateCasePriorityOperation = "set" | "change" | "remove";
+export type UpdateCasePriorityOutcome =
+  | "updated"
+  | "removed"
+  | "updated_projection_failed"
+  | "removed_projection_failed"
+  | "case_not_found"
+  | "unauthenticated"
+  | "unauthorized"
+  | "invalid_priority"
+  | "invalid_operation"
+  | "invalid_case_state"
+  | "conflict"
+  | "config_unavailable"
+  | "internal_error";
+
+export interface UpdateCasePriorityResponse {
+  ok: boolean;
+  outcome: UpdateCasePriorityOutcome;
+  caseRecord?: CaseRecord;
+  event?: TraceEvent;
+}
+
 export interface PublicKioskConfig {
   centerId: string;
   enabled: boolean;
@@ -191,6 +214,32 @@ export const createPriorityArrivalCallable = async (
   if (result.data.outcome === "created" &&
     (!result.data.createdCase || !result.data.metadata || !result.data.events)) {
     throw new Error("INVALID_PRIORITY_ARRIVAL_RESPONSE");
+  }
+  return result.data;
+};
+
+export const updateCasePriorityCallable = async (
+  centerId: string,
+  caseId: string,
+  operation: UpdateCasePriorityOperation,
+  priorityType?: PriorityType,
+): Promise<UpdateCasePriorityResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<
+    { centerId: string; caseId: string; operation: UpdateCasePriorityOperation; priorityType?: PriorityType },
+    UpdateCasePriorityResponse
+  >(functions, "updateCasePriority");
+  const result = await callable({ centerId, caseId, operation, ...(priorityType ? { priorityType } : {}) });
+  const outcomes: UpdateCasePriorityOutcome[] = [
+    "updated", "removed", "updated_projection_failed", "removed_projection_failed",
+    "case_not_found", "unauthenticated", "unauthorized", "invalid_priority", "invalid_operation",
+    "invalid_case_state", "conflict", "config_unavailable", "internal_error",
+  ];
+  if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome)) {
+    throw new Error("INVALID_PRIORITY_MUTATION_RESPONSE");
+  }
+  if (result.data.ok && (!result.data.caseRecord || !result.data.event)) {
+    throw new Error("INVALID_PRIORITY_MUTATION_RESPONSE");
   }
   return result.data;
 };

@@ -20,6 +20,7 @@ import {
 import {
   callNextWindowCaseCallable,
   createPriorityArrivalCallable,
+  updateCasePriorityCallable,
   type CallNextWindowCaseOutcome,
   database,
   publicDisplayCallEventUpdate,
@@ -654,155 +655,6 @@ const transactionNonce = () => {
 };
 
 export const generatePublicToken = () => transactionNonce();
-
-export const createArrivalRealtime = async (
-  data: AppData,
-  serviceType: ServiceType,
-): Promise<AppData> => {
-  if (!database) return createArrival(data, serviceType);
-
-  const base = ensureSession(data);
-  const center = getCurrentCenter(base);
-  const session = getCurrentSession(base);
-  const assignedWindow = firstEnabledWindowFor(center, serviceType);
-
-  if (!assignedWindow || session.status !== "open" || !isCenterOpenForTickets(center)) {
-    return base;
-  }
-
-  const now = Date.now();
-  const nonce = transactionNonce();
-  const caseId = `${center.shortCode}-${session.date}-${nonce}`;
-  const publicToken = generatePublicToken();
-  const eventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
-
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      const currentDay = currentValue ?? {};
-      const currentMetadata = currentDay.metadata ?? {};
-      if (currentMetadata.status === "closed") return;
-
-      const windowSequences = collectionRecord<number>(currentMetadata.windowSequences);
-      const storedSequence = windowSequences[assignedWindow.windowId];
-      const currentSequence =
-        Number.isSafeInteger(storedSequence) && storedSequence >= 0 ? storedSequence : 0;
-      const publicSequence = currentSequence + 1;
-      const publicCode = formatPublicCode(assignedWindow.windowNumber, publicSequence);
-      const storedGlobalSequence = currentMetadata.nextGlobalArrivalSequence;
-      const globalArrivalSequence =
-        typeof storedGlobalSequence === "number" &&
-        Number.isSafeInteger(storedGlobalSequence) &&
-        storedGlobalSequence >= 1
-          ? storedGlobalSequence
-          : 1;
-
-      const caseRecord: CaseRecord = {
-        caseId,
-        publicToken,
-        centerId: center.centerId,
-        sessionId: session.sessionId,
-        publicCode,
-        globalArrivalSequence,
-        publicSequence,
-        serviceType,
-        serviceLabel: assignedWindow.serviceLabel,
-        validationLevel: assignedWindow.validationLevel,
-        personKind: "not_specified",
-        assignedWindowId: assignedWindow.windowId,
-        assignedWindowNumber: assignedWindow.windowNumber,
-        assignedOperatorId: null,
-        isPriority: false,
-        priorityType: null,
-        priorityCreatedBy: null,
-        priorityCreatedAt: null,
-        currentState: "waiting_document_validation",
-        arrivalAt: now,
-        calledToWindowAt: null,
-        documentValidationStartedAt: null,
-        documentValidationCompletedAt: null,
-        documentStatus: "pending",
-        optionalInternalNote: null,
-        folderCode: null,
-        paymentQueueNumber: null,
-        paymentTicketId: null,
-        cashierId: null,
-        calledToCashierAt: null,
-        cashierStartedAt: null,
-        paymentCompletedAt: null,
-        completedAt: null,
-        updatedAt: now,
-      };
-      const arrivalEvent: TraceEvent = {
-        eventId,
-        centerId: center.centerId,
-        sessionId: session.sessionId,
-        caseId,
-        actorRole: "kiosk",
-        actorId: "kiosk",
-        action: "arrival_created",
-        fromState: null,
-        toState: "waiting_document_validation",
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentDay,
-        metadata: {
-          ...session,
-          ...currentMetadata,
-          sessionId: session.sessionId,
-          centerId: center.centerId,
-          date: session.date,
-          status: "open",
-          nextGlobalArrivalSequence: globalArrivalSequence + 1,
-          windowSequences: {
-            ...windowSequences,
-            [assignedWindow.windowId]: publicSequence,
-          },
-        },
-        cases: {
-          ...collectionRecord<CaseRecord>(currentDay.cases),
-          [caseId]: caseRecord,
-        },
-        events: {
-          ...collectionRecord<TraceEvent>(currentDay.events),
-          [eventId]: arrivalEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
-
-  if (!result.committed) return base;
-
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedCase = committedDay?.cases?.[caseId];
-  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
-  const committedMetadata = committedDay?.metadata;
-
-  if (!committedCase || !committedEvent || !committedMetadata) return base;
-
-  await syncPublicCaseProjection(committedCase, center, session.date);
-
-  return {
-    ...base,
-    sessions: {
-      ...base.sessions,
-      [session.sessionId]: {
-        ...session,
-        ...committedMetadata,
-      },
-    },
-    cases: {
-      ...base.cases,
-      [caseId]: committedCase,
-    },
-    events: [committedEvent, ...base.events],
-  };
-};
 
 export type PriorityArrivalOutcome =
   | "created"
@@ -1524,34 +1376,49 @@ export const removeCasePriority = (
   };
 };
 
-const canManageCasePriorityRealtime = (
-  current: CaseRecord | null,
-  data: AppData,
-  sessionId: string,
-  role: Role,
-): current is CaseRecord =>
-  Boolean(
-    current &&
-      (role === "operator-window-1" || role === "operator-window-2") &&
-      current.centerId === data.selectedCenterId &&
-      current.sessionId === sessionId &&
-      [
-        "waiting_document_validation",
-        "called_to_window",
-        "in_document_validation",
-      ].includes(current.currentState),
-  );
-
 const mergeRealtimePriorityCase = (
   data: AppData,
   current: CaseRecord,
+  traceEvent: TraceEvent,
 ): AppData => ({
   ...data,
   cases: {
     ...data.cases,
     [current.caseId]: current,
   },
+  events: [traceEvent, ...data.events.filter((item) => item.eventId !== traceEvent.eventId)],
 });
+
+export class PriorityMutationError extends Error {
+  constructor(public readonly outcome: string) {
+    super(outcome);
+    this.name = "PriorityMutationError";
+  }
+}
+
+const mutateCasePriorityRealtime = async (
+  data: AppData,
+  caseId: string,
+  operation: "set" | "change" | "remove",
+  role: Role,
+  priorityType?: PriorityType,
+): Promise<AppData> => {
+  if (!database) {
+    if (operation === "set" && priorityType) return markCaseAsPriority(data, caseId, priorityType, role);
+    if (operation === "change" && priorityType) return updateCasePriority(data, caseId, priorityType, role);
+    return removeCasePriority(data, caseId, role);
+  }
+  const response = await updateCasePriorityCallable(
+    data.selectedCenterId,
+    caseId,
+    operation,
+    priorityType,
+  );
+  if (!response.ok || !response.caseRecord || !response.event) {
+    throw new PriorityMutationError(response.outcome);
+  }
+  return mergeRealtimePriorityCase(data, response.caseRecord, response.event);
+};
 
 export const markCaseAsPriorityRealtime = async (
   data: AppData,
@@ -1562,36 +1429,7 @@ export const markCaseAsPriorityRealtime = async (
   if (!database) {
     return markCaseAsPriority(data, caseId, priorityType, role);
   }
-
-  const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const caseRef = ref(
-    database,
-    `days/${base.selectedCenterId}/${session.date}/cases/${caseId}`,
-  );
-  const result = await runTransaction(
-    caseRef,
-    (current: CaseRecord | null) => {
-      if (
-        !canManageCasePriorityRealtime(current, base, session.sessionId, role) ||
-        current.isPriority
-      ) {
-        return;
-      }
-
-      return {
-        ...current,
-        isPriority: true,
-        priorityType,
-      };
-    },
-    { applyLocally: false },
-  );
-  const current = result.snapshot.val() as CaseRecord | null;
-  if (!result.committed || !current) return base;
-
-  await syncPublicCaseProjection(current, getCurrentCenter(base), session.date);
-  return mergeRealtimePriorityCase(base, current);
+  return mutateCasePriorityRealtime(data, caseId, "set", role, priorityType);
 };
 
 export const updateCasePriorityRealtime = async (
@@ -1604,36 +1442,7 @@ export const updateCasePriorityRealtime = async (
     return updateCasePriority(data, caseId, priorityType, role);
   }
 
-  const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const caseRef = ref(
-    database,
-    `days/${base.selectedCenterId}/${session.date}/cases/${caseId}`,
-  );
-  const result = await runTransaction(
-    caseRef,
-    (current: CaseRecord | null) => {
-      if (
-        !canManageCasePriorityRealtime(current, base, session.sessionId, role) ||
-        !current.isPriority ||
-        current.priorityType === priorityType
-      ) {
-        return;
-      }
-
-      return {
-        ...current,
-        isPriority: true,
-        priorityType,
-      };
-    },
-    { applyLocally: false },
-  );
-  const current = result.snapshot.val() as CaseRecord | null;
-  if (!result.committed || !current) return base;
-
-  await syncPublicCaseProjection(current, getCurrentCenter(base), session.date);
-  return mergeRealtimePriorityCase(base, current);
+  return mutateCasePriorityRealtime(data, caseId, "change", role, priorityType);
 };
 
 export const removeCasePriorityRealtime = async (
@@ -1645,35 +1454,7 @@ export const removeCasePriorityRealtime = async (
     return removeCasePriority(data, caseId, role);
   }
 
-  const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const caseRef = ref(
-    database,
-    `days/${base.selectedCenterId}/${session.date}/cases/${caseId}`,
-  );
-  const result = await runTransaction(
-    caseRef,
-    (current: CaseRecord | null) => {
-      if (
-        !canManageCasePriorityRealtime(current, base, session.sessionId, role) ||
-        !current.isPriority
-      ) {
-        return;
-      }
-
-      return {
-        ...current,
-        isPriority: false,
-        priorityType: null,
-      };
-    },
-    { applyLocally: false },
-  );
-  const current = result.snapshot.val() as CaseRecord | null;
-  if (!result.committed || !current) return base;
-
-  await syncPublicCaseProjection(current, getCurrentCenter(base), session.date);
-  return mergeRealtimePriorityCase(base, current);
+  return mutateCasePriorityRealtime(data, caseId, "remove", role);
 };
 
 export const reassignCase = (
