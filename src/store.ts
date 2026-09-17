@@ -31,6 +31,7 @@ import {
   toPublicTurnStatus,
   update,
 } from "./services/firebase";
+import type { OperationalCenterConfig } from "./operationalCenterConfig";
 
 const STORAGE_KEY = "ccvi-control-atencion-demo-v2-3";
 
@@ -80,24 +81,55 @@ const timeToMinutes = (time: string) => {
   return hours * 60 + minutes;
 };
 
-export const getCenterServiceHours = (center: CenterConfig) => ({
+export const getCenterServiceHours = (center: Pick<CenterConfig, "serviceStartTime" | "serviceEndTime">) => ({
   start: normalizeServiceTime(center.serviceStartTime, DEFAULT_SERVICE_START_TIME),
   end: normalizeServiceTime(center.serviceEndTime, DEFAULT_SERVICE_END_TIME),
 });
 
-export const isCenterOpenForTickets = (center: CenterConfig, now = new Date()) => {
-  const { start, end } = getCenterServiceHours(center);
+export type CenterScheduleStatus = "open" | "closed" | "unavailable";
+
+export const getCenterScheduleStatus = (
+  center: OperationalCenterConfig,
+  now = new Date(),
+): CenterScheduleStatus => {
+  if (
+    !center.enabled ||
+    !TIME_PATTERN.test(center.serviceStartTime) ||
+    !TIME_PATTERN.test(center.serviceEndTime) ||
+    !center.timezone
+  ) {
+    return "unavailable";
+  }
+  const start = center.serviceStartTime;
+  const end = center.serviceEndTime;
   const startMinutes = timeToMinutes(start);
   const endMinutes = timeToMinutes(end);
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-  if (startMinutes === endMinutes) return false;
-  if (startMinutes < endMinutes) {
-    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  let currentMinutes: number;
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: center.timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(now);
+    const hours = Number(parts.find((part) => part.type === "hour")?.value);
+    const minutes = Number(parts.find((part) => part.type === "minute")?.value);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return "unavailable";
+    currentMinutes = hours * 60 + minutes;
+  } catch {
+    return "unavailable";
   }
 
-  return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+  if (startMinutes === endMinutes) return "closed";
+  if (startMinutes < endMinutes) {
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes ? "open" : "closed";
+  }
+
+  return currentMinutes >= startMinutes || currentMinutes < endMinutes ? "open" : "closed";
 };
+
+export const isCenterOpenForTickets = (center: CenterConfig, now = new Date()) =>
+  getCenterScheduleStatus(center, now) === "open";
 
 export const formatServiceHours = (center: CenterConfig) => {
   const { start, end } = getCenterServiceHours(center);
@@ -771,34 +803,63 @@ export const createArrivalRealtime = async (
   };
 };
 
+export type PriorityArrivalOutcome =
+  | "created"
+  | "stale-context"
+  | "center-closed"
+  | "config-unavailable"
+  | "transaction-not-committed"
+  | "created-public-sync-failed"
+  | "unexpected-error";
+
+export interface PriorityArrivalResult {
+  data: AppData;
+  createdCase: CaseRecord | null;
+  outcome: PriorityArrivalOutcome;
+}
+
 export const createPriorityArrivalRealtime = async (
   data: AppData,
   serviceType: ServiceType,
   priorityType: PriorityType,
   role: Role,
-): Promise<{ data: AppData; createdCase: CaseRecord | null }> => {
+  executionContextIsCurrent: () => boolean,
+  currentTime = new Date(),
+): Promise<PriorityArrivalResult> => {
+  if (!executionContextIsCurrent()) {
+    return { data, createdCase: null, outcome: "stale-context" };
+  }
+
   if (!database) {
     const nextData = createPriorityArrival(data, serviceType, priorityType, role);
     const createdCase = Object.values(nextData.cases).find(
       (caseItem) => !data.cases[caseItem.caseId],
     ) ?? null;
-    return { data: nextData, createdCase };
+    return {
+      data: nextData,
+      createdCase,
+      outcome: createdCase ? "created" : "unexpected-error",
+    };
   }
 
-  const base = ensureSession(data);
-  const center = getCurrentCenter(base);
-  const session = getCurrentSession(base);
+  const center = getCurrentCenter(data);
   const assignedWindow = firstEnabledWindowFor(center, serviceType);
-  if (
-    !assignedWindow ||
-    session.status !== "open" ||
-    !isCenterOpenForTickets(center) ||
-    !["operator-window-1", "operator-window-2"].includes(role)
-  ) {
-    return { data: base, createdCase: null };
+  if (!assignedWindow || !["operator-window-1", "operator-window-2"].includes(role)) {
+    return { data, createdCase: null, outcome: "config-unavailable" };
+  }
+  if (getCenterScheduleStatus(center, currentTime) === "unavailable") {
+    return { data, createdCase: null, outcome: "config-unavailable" };
+  }
+  if (!isCenterOpenForTickets(center, currentTime)) {
+    return { data, createdCase: null, outcome: "center-closed" };
+  }
+  const base = ensureSession(data);
+  const session = getCurrentSession(base);
+  if (session.status !== "open") {
+    return { data: base, createdCase: null, outcome: "transaction-not-committed" };
   }
 
-  const now = Date.now();
+  const now = currentTime.getTime();
   const nonce = transactionNonce();
   const caseId = `${center.shortCode}-${session.date}-${nonce}`;
   const publicToken = generatePublicToken();
@@ -806,9 +867,11 @@ export const createPriorityArrivalRealtime = async (
   const priorityEventId = `${now}-${transactionNonce()}`;
   const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
 
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
+  let result;
+  try {
+    result = await runTransaction(
+      dayReference,
+      (currentValue: RealtimeOperationalDay | null) => {
       const currentDay = currentValue ?? {};
       const currentMetadata = currentDay.metadata ?? {};
       if (currentMetadata.status === "closed") return;
@@ -914,11 +977,16 @@ export const createPriorityArrivalRealtime = async (
           [priorityEventId]: priorityEvent,
         },
       } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
+      },
+      { applyLocally: false },
+    );
+  } catch {
+    return { data: base, createdCase: null, outcome: "unexpected-error" };
+  }
 
-  if (!result.committed) return { data: base, createdCase: null };
+  if (!result.committed) {
+    return { data: base, createdCase: null, outcome: "transaction-not-committed" };
+  }
   const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
   const committedCase = committedDay?.cases?.[caseId];
   const committedEvents = collectionRecord<TraceEvent>(committedDay?.events);
@@ -926,14 +994,10 @@ export const createPriorityArrivalRealtime = async (
   const priorityEvent = committedEvents[priorityEventId];
   const committedMetadata = committedDay?.metadata;
   if (!committedCase || !arrivalEvent || !priorityEvent || !committedMetadata) {
-    return { data: base, createdCase: null };
+    return { data: base, createdCase: null, outcome: "unexpected-error" };
   }
 
-  await syncPublicCaseProjection(committedCase, center, session.date);
-
-  return {
-    createdCase: committedCase,
-    data: {
+  const committedData: AppData = {
       ...base,
       sessions: {
         ...base.sessions,
@@ -941,7 +1005,22 @@ export const createPriorityArrivalRealtime = async (
       },
       cases: { ...base.cases, [caseId]: committedCase },
       events: [priorityEvent, arrivalEvent, ...base.events],
-    },
+  };
+
+  try {
+    await syncPublicCaseProjection(committedCase, center, session.date);
+  } catch {
+    return {
+      createdCase: committedCase,
+      data: committedData,
+      outcome: "created-public-sync-failed",
+    };
+  }
+
+  return {
+    createdCase: committedCase,
+    data: committedData,
+    outcome: "created",
   };
 };
 

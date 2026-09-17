@@ -97,6 +97,7 @@ import {
   getAccessiblePublicTicketLabel,
   getCurrentCenter,
   getCurrentSession,
+  getCenterScheduleStatus,
   isCenterOpenForTickets,
   getPublicStatusUrl,
   loadData,
@@ -121,6 +122,16 @@ import {
   updateCenter,
   windowForRole,
 } from "./store";
+import {
+  applyOperationalDataContextChange,
+  hydrateOperationalCenterConfig,
+  createOperationalExecutionGuard,
+  invalidateOperationalAuthority,
+  resolveActiveOperationalConfig,
+  subscribeToAuthorizedOperationalConfig,
+  type OperationalConfigLifecycleState,
+  type OperationalConfigStatus,
+} from "./operationalCenterConfig";
 import {
   createKioskArrivalCallable,
   hasFirebaseConfig,
@@ -1087,28 +1098,8 @@ interface KioskIssuedTicket {
   assignedWindowNumber: number;
 }
 
-const kioskMinutesInTimezone = (timezone: string) => {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const hour = Number(parts.find((part) => part.type === "hour")?.value);
-  const minute = Number(parts.find((part) => part.type === "minute")?.value);
-  return hour * 60 + minute;
-};
-
-const isPublicKioskOpen = (center: PublicKioskConfig) => {
-  if (!center.enabled) return false;
-  const [startHour, startMinute] = center.serviceStartTime.split(":").map(Number);
-  const [endHour, endMinute] = center.serviceEndTime.split(":").map(Number);
-  const start = startHour * 60 + startMinute;
-  const end = endHour * 60 + endMinute;
-  const current = kioskMinutesInTimezone(center.timezone);
-  if (![start, end, current].every(Number.isFinite) || start === end) return false;
-  return start < end ? current >= start && current < end : current >= start || current < end;
-};
+const isPublicKioskOpen = (center: PublicKioskConfig) =>
+  getCenterScheduleStatus(center) === "open";
 
 const KioskView = ({ centerId }: { centerId: string }) => {
   const [center, setCenter] = useState<PublicKioskConfig | null>(null);
@@ -1702,12 +1693,18 @@ const OperatorView = ({
   data,
   setData,
   onFeedback,
+  centerConfigStatus,
+  operationalConfigContext,
+  getCurrentOperationalConfig,
 }: {
   operatorWindow: NonNullable<ReturnType<typeof windowForRole>>;
   role: Role;
   data: AppData;
   setData: (updater: (data: AppData) => AppData) => void;
   onFeedback: (message: string) => void;
+  centerConfigStatus: OperationalConfigStatus;
+  operationalConfigContext: OperationalConfigLifecycleState;
+  getCurrentOperationalConfig: () => OperationalConfigLifecycleState;
 }) => {
   const [priorityDialogCase, setPriorityDialogCase] = useState<CaseRecord | null>(null);
   const [priorityCreationOpen, setPriorityCreationOpen] = useState(false);
@@ -1719,6 +1716,7 @@ const OperatorView = ({
   const [rejectedCustomerName, setRejectedCustomerName] = useState("");
   const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
   const [isCallingNext, setIsCallingNext] = useState(false);
+  const [scheduleNow, setScheduleNow] = useState(() => new Date());
   const callNextPendingRef = useRef(false);
   const rejectedPhoneIsInvalid = Boolean(rejectedCustomerPhone) && !normalizeChileanPhone(rejectedCustomerPhone);
   const closePriorityDialog = () => {
@@ -1734,6 +1732,14 @@ const OperatorView = ({
     setRejectedCustomerPhone("");
   };
   const center = getCurrentCenter(data);
+  const centerScheduleStatus = centerConfigStatus === "ready"
+    ? getCenterScheduleStatus(center, scheduleNow)
+    : centerConfigStatus;
+  const priorityCreationAvailable = centerScheduleStatus === "open";
+  useEffect(() => {
+    const timer = window.setInterval(() => setScheduleNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const otherWindows = center.windows.filter(
     (windowItem) => windowItem.enabled && windowItem.windowId !== operatorWindow.windowId,
   );
@@ -1903,11 +1909,13 @@ const OperatorView = ({
               variant="contained"
               endIcon={<Accessible />}
               onClick={() => {
+                if (!priorityCreationAvailable) return;
                 setPriorityDialogCase(null);
                 setCreatedPriorityCase(null);
                 setSelectedPriorityType("");
                 setPriorityCreationOpen(true);
               }}
+              disabled={!priorityCreationAvailable}
               sx={{
                           width: "100%",
                           flex: 1,
@@ -1931,6 +1939,21 @@ const OperatorView = ({
                   Turno Preferencial
                 </Button>
               </Stack>
+              {centerScheduleStatus === "closed" && (
+                <Alert severity="warning" role="status">
+                  Fuera del horario de atención. Disponible de {formatServiceHours(center)}.
+                </Alert>
+              )}
+              {centerScheduleStatus === "loading" && (
+                <Alert severity="info" role="status">
+                  Cargando el horario autorizado del centro…
+                </Alert>
+              )}
+              {centerScheduleStatus === "error" || centerScheduleStatus === "unavailable" ? (
+                <Alert severity="error" role="alert">
+                  No pudimos verificar el horario del centro. La creación de turnos preferenciales no está disponible.
+                </Alert>
+              ) : null}
               <Alert
                 severity="info"
                 sx={{
@@ -2426,6 +2449,7 @@ const OperatorView = ({
             variant="contained"
             disabled={
               isCreatingPriority ||
+              (priorityCreationOpen && !priorityCreationAvailable) ||
               (!priorityCreationOpen &&
                 (!selectedPriorityType ||
                 (!priorityDialogCase ||
@@ -2434,6 +2458,10 @@ const OperatorView = ({
             }
             onClick={async () => {
               if (priorityCreationOpen) {
+                if (!priorityCreationAvailable) {
+                  onFeedback("No es posible crear el turno porque el horario autorizado del centro no está disponible.");
+                  return;
+                }
                 setIsCreatingPriority(true);
                 try {
                   const result = await createPriorityArrivalRealtime(
@@ -2441,11 +2469,31 @@ const OperatorView = ({
                     operatorWindow.serviceType,
                     "other",
                     role,
+                    createOperationalExecutionGuard(
+                      operationalConfigContext,
+                      getCurrentOperationalConfig,
+                    ),
                   );
                   setData(() => result.data);
-                  if (result.createdCase) setCreatedPriorityCase(result.createdCase);
-                } catch (error) {
-                  console.error("No se pudo crear el turno preferencial.", error);
+                  if (result.outcome === "created" && result.createdCase) {
+                    setCreatedPriorityCase(result.createdCase);
+                  } else if (result.outcome === "created-public-sync-failed" && result.createdCase) {
+                    setCreatedPriorityCase(result.createdCase);
+                    onFeedback("El turno fue creado, pero su información pública no pudo sincronizarse. No genere otro turno.");
+                  } else if (result.outcome === "center-closed") {
+                    onFeedback(`Fuera del horario de atención. Disponible de ${formatServiceHours(center)}.`);
+                  } else if (
+                    result.outcome === "config-unavailable" ||
+                    result.outcome === "stale-context"
+                  ) {
+                    onFeedback("No pudimos verificar la configuración del centro. Intente nuevamente cuando el horario esté disponible.");
+                  } else if (result.outcome === "transaction-not-committed") {
+                    onFeedback("No fue posible crear el turno. La jornada puede no estar disponible.");
+                  } else {
+                    onFeedback("No fue posible crear el turno preferencial. Intente nuevamente.");
+                  }
+                } catch {
+                  onFeedback("No fue posible crear el turno preferencial. Intente nuevamente.");
                 } finally {
                   setIsCreatingPriority(false);
                 }
@@ -4639,6 +4687,19 @@ const App = () => {
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [centerConfigHydration, setCenterConfigHydration] =
+    useState<OperationalConfigLifecycleState>({
+      contextKey: null,
+      centerId: null,
+      status: "loading",
+      config: null,
+    });
+  const operationalExecutionContextRef = useRef<OperationalConfigLifecycleState>({
+    contextKey: null,
+    centerId: null,
+    status: "loading",
+    config: null,
+  });
 
   const publicToken = useMemo(() => {
     const match = window.location.pathname.match(/^\/turno\/(.+)$/);
@@ -4669,11 +4730,15 @@ const App = () => {
     [storedData, rolloverEnabled, operationalDayId],
   );
 
-  useEffect(() => observeAuthSession(setAuthSession), []);
+  useEffect(() => observeAuthSession((nextAuthSession) => {
+    invalidateOperationalAuthority(operationalExecutionContextRef);
+    setAuthSession(nextAuthSession);
+  }), []);
 
   const setData = (updater: (data: AppData) => AppData) => {
     setDataState((current) => {
       const next = updater(current);
+      applyOperationalDataContextChange(current, next, operationalExecutionContextRef);
       saveData(next);
       return next;
     });
@@ -4729,7 +4794,13 @@ const App = () => {
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key === "ccvi-control-atencion-demo-v2-3" && event.newValue) {
-        setDataState(loadData());
+        setDataState((current) =>
+          applyOperationalDataContextChange(
+            current,
+            loadData(),
+            operationalExecutionContextRef,
+          ),
+        );
       }
     };
     window.addEventListener("storage", onStorage);
@@ -4744,6 +4815,42 @@ const App = () => {
   const hasAuthorizedCenter = Boolean(
     authenticatedProfile?.centerIds.includes(selectedCenterId),
   );
+  const operatorProfile = authenticatedProfile?.role === "operator-window-1" ||
+    authenticatedProfile?.role === "operator-window-2";
+  const operationalConfigContextKey = authenticatedProfile?.enabled &&
+    operatorProfile &&
+    hasAuthorizedCenter
+    ? `${authenticatedProfile.uid}:${selectedCenterId}`
+    : null;
+  const activeOperationalConfig = resolveActiveOperationalConfig(
+    operationalConfigContextKey,
+    selectedCenterId,
+    centerConfigHydration,
+  );
+  operationalExecutionContextRef.current = activeOperationalConfig;
+
+  useEffect(() => {
+    if (!authenticatedProfile || !operationalConfigContextKey) {
+      const unavailableContext = invalidateOperationalAuthority(
+        operationalExecutionContextRef,
+      );
+      setCenterConfigHydration(unavailableContext);
+      return;
+    }
+
+    const unsubscribe = subscribeToAuthorizedOperationalConfig({
+      contextKey: operationalConfigContextKey,
+      centerId: selectedCenterId,
+      authorizedCenterIds: authenticatedProfile.centerIds,
+      subscribe: subscribeToPublicKioskConfig,
+      onState: (nextState) => {
+        operationalExecutionContextRef.current = nextState;
+        setCenterConfigHydration(nextState);
+      },
+    });
+
+    return unsubscribe;
+  }, [operationalConfigContextKey, selectedCenterId]);
 
   useEffect(() => {
     if (!authenticatedProfile || hasAuthorizedCenter) return;
@@ -4899,16 +5006,37 @@ const App = () => {
       }
     : operationalData;
 
+  const operatorData = activeOperationalConfig.status === "ready" &&
+    activeOperationalConfig.config
+    ? hydrateOperationalCenterConfig(
+        privateData,
+        selectedCenterId,
+        activeOperationalConfig.config,
+      )
+    : privateData;
+
   const activeOperatorWindow = effectiveRole.startsWith("operator")
-    ? windowForRole(getCurrentCenter(privateData), effectiveRole)
+    ? windowForRole(getCurrentCenter(operatorData), effectiveRole)
     : null;
 
   return (
     <>
-      <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? () => void signOutCurrentUser() : undefined} />
+      <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? () => {
+        invalidateOperationalAuthority(operationalExecutionContextRef);
+        void signOutCurrentUser();
+      } : undefined} />
       {effectiveRole === "kiosk" && <KioskView centerId={data.selectedCenterId} />}
       {effectiveRole.startsWith("operator") && activeOperatorWindow && (
-        <OperatorView operatorWindow={activeOperatorWindow} role={effectiveRole} data={privateData} setData={setData} onFeedback={setSnackbar} />
+        <OperatorView
+          operatorWindow={activeOperatorWindow}
+          role={effectiveRole}
+          data={operatorData}
+          setData={setData}
+          onFeedback={setSnackbar}
+          centerConfigStatus={activeOperationalConfig.status}
+          operationalConfigContext={activeOperationalConfig}
+          getCurrentOperationalConfig={() => operationalExecutionContextRef.current}
+        />
       )}
       {effectiveRole.startsWith("operator") && !activeOperatorWindow && (
         <Page title="Ventanilla no disponible">
