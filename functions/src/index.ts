@@ -38,6 +38,13 @@ interface CenterConfig {
 }
 
 type WindowRole = "operator-window-1" | "operator-window-2";
+type PriorityType =
+  | "older_adult"
+  | "pregnant"
+  | "wheelchair_user"
+  | "disability"
+  | "reduced_mobility"
+  | "other";
 
 interface UserProfile {
   uid: string;
@@ -84,7 +91,52 @@ interface CallNextWindowContext {
   eventId: string;
 }
 
+interface PriorityArrivalContext {
+  centerId: string;
+  sessionId: string;
+  dayId: string;
+  role: WindowRole;
+  window: CenterWindow;
+  priorityType: PriorityType;
+  timestamp: number;
+  caseId: string;
+  publicToken: string;
+  arrivalEventId: string;
+  priorityEventId: string;
+}
+
+interface CommittedPriorityArrival {
+  createdCase: Record<string, unknown>;
+  metadata: unknown;
+  events: [unknown, unknown];
+}
+
+let priorityArrivalAfterCommitTestHook: (() => void) | null = null;
+let priorityArrivalBeforeTransactionTestHook: (() => void) | null = null;
+export const setPriorityArrivalAfterCommitTestHook = (hook: (() => void) | null) => {
+  if (!process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
+    throw new Error("PRIORITY_TEST_HOOK_REQUIRES_EMULATOR");
+  }
+  priorityArrivalAfterCommitTestHook = hook;
+};
+export const setPriorityArrivalBeforeTransactionTestHook = (hook: (() => void) | null) => {
+  if (!process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
+    throw new Error("PRIORITY_TEST_HOOK_REQUIRES_EMULATOR");
+  }
+  priorityArrivalBeforeTransactionTestHook = hook;
+};
+
 const serviceTypes: ServiceType[] = ["representation", "vehicle_owner"];
+const priorityTypes: PriorityType[] = [
+  "older_adult", "pregnant", "wheelchair_user", "disability", "reduced_mobility", "other",
+];
+export const isPriorityArrivalInput = (value: unknown): value is { centerId: string; priorityType: PriorityType } => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  return Object.keys(input).length === 2 && typeof input.centerId === "string" &&
+    centerIdPattern.test(input.centerId) && typeof input.priorityType === "string" &&
+    priorityTypes.includes(input.priorityType as PriorityType);
+};
 const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const centerIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const windowIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
@@ -289,6 +341,138 @@ export const callNextWindowResponse = (
   };
 };
 
+export const authorizePriorityWindow = (
+  profile: UserProfile | null,
+  uid: string,
+  centerId: string,
+  windows: CenterWindow[],
+) => {
+  if (!profile || profile.uid !== uid || profile.enabled !== true) return null;
+  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) return null;
+  const windowNumber = profile.role === "operator-window-1" ? 1 :
+    profile.role === "operator-window-2" ? 2 : null;
+  if (!windowNumber) return null;
+  const windowItem = windows.find((item) => item.windowNumber === windowNumber && item.enabled === true);
+  return windowItem && windowItem.windowId && /^V[1-9]\d*$/.test(windowItem.publicCodePrefix) &&
+    serviceTypes.includes(windowItem.serviceType) && typeof windowItem.serviceLabel === "string" &&
+    ["enhanced", "standard"].includes(windowItem.validationLevel) ? windowItem : null;
+};
+
+export const applyPriorityArrivalMutation = (
+  currentDay: WindowDay | null,
+  context: PriorityArrivalContext,
+  allowInitialization: boolean,
+) => {
+  if (!currentDay && !allowInitialization) {
+    return { status: "transaction-conflict" as const, day: undefined };
+  }
+  const day = currentDay ?? {};
+  const metadata = recordOf<unknown>(day.metadata);
+  if (metadata.status === "closed") return { status: "closed" as const, day: undefined };
+  const windowSequences = recordOf<number>(metadata.windowSequences);
+  const storedSequence = windowSequences[context.window.windowId];
+  const currentSequence = Number.isSafeInteger(storedSequence) && storedSequence >= 0 ? storedSequence : 0;
+  const publicSequence = currentSequence + 1;
+  const storedGlobalSequence = metadata.nextGlobalArrivalSequence;
+  const globalArrivalSequence = typeof storedGlobalSequence === "number" &&
+    Number.isSafeInteger(storedGlobalSequence) && storedGlobalSequence >= 1 ? storedGlobalSequence : 1;
+  const publicCode = `${context.window.publicCodePrefix}-${String(publicSequence).padStart(2, "0")}`;
+  const caseRecord = {
+    caseId: context.caseId, publicToken: context.publicToken, centerId: context.centerId,
+    sessionId: context.sessionId, publicCode, globalArrivalSequence, publicSequence,
+    serviceType: context.window.serviceType, serviceLabel: context.window.serviceLabel,
+    validationLevel: context.window.validationLevel, personKind: "not_specified",
+    assignedWindowId: context.window.windowId, assignedWindowNumber: context.window.windowNumber,
+    assignedOperatorId: null, isPriority: true, priorityType: context.priorityType,
+    priorityCreatedBy: context.role, priorityCreatedAt: context.timestamp,
+    currentState: "waiting_document_validation", arrivalAt: context.timestamp,
+    calledToWindowAt: null, documentValidationStartedAt: null,
+    documentValidationCompletedAt: null, documentStatus: "pending",
+    optionalInternalNote: null, folderCode: null, paymentQueueNumber: null,
+    paymentTicketId: null, cashierId: null, calledToCashierAt: null,
+    cashierStartedAt: null, paymentCompletedAt: null, completedAt: null,
+    updatedAt: context.timestamp,
+  };
+  const event = (eventId: string, action: string, fromState: string | null, optionalNote: string | null) => ({
+    eventId, centerId: context.centerId, sessionId: context.sessionId, caseId: context.caseId,
+    actorRole: context.role, actorId: context.role, action, fromState,
+    toState: "waiting_document_validation", timestamp: context.timestamp, optionalNote,
+  });
+  return {
+    status: "created" as const,
+    caseRecord,
+    day: {
+      ...day,
+      metadata: {
+        sessionId: context.sessionId, centerId: context.centerId, date: context.dayId, status: "open",
+        nextGlobalArrivalSequence: globalArrivalSequence + 1,
+        windowSequences: { ...windowSequences, [context.window.windowId]: publicSequence },
+        consecutivePriorityCasesByWindow: metadata.consecutivePriorityCasesByWindow ?? {},
+        consecutivePriorityCasesForCashier: metadata.consecutivePriorityCasesForCashier ?? 0,
+        nextFolderNumber: metadata.nextFolderNumber ?? 1,
+        nextPaymentQueueNumber: metadata.nextPaymentQueueNumber ?? 1,
+        openedAt: metadata.openedAt ?? context.timestamp, closedAt: null,
+      },
+      cases: { ...recordOf(day.cases), [context.caseId]: caseRecord },
+      events: {
+        ...recordOf(day.events),
+        [context.arrivalEventId]: event(context.arrivalEventId, "arrival_created", null, null),
+        [context.priorityEventId]: event(
+          context.priorityEventId, "priority_created", "waiting_document_validation", context.priorityType,
+        ),
+      },
+    } as WindowDay,
+  };
+};
+
+export const runPriorityArrivalTransaction = async (
+  subscribeToAuthoritativeDay: (
+    onValue: (exists: boolean) => void,
+    onError: (error: unknown) => void,
+  ) => () => void,
+  transact: (
+    update: (currentDay: WindowDay | null) => WindowDay | undefined,
+  ) => Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: PriorityArrivalContext,
+) => {
+  let detachListener = () => {};
+  try {
+    const authoritativeDayExists = await new Promise<boolean>((resolve, reject) => {
+      detachListener = subscribeToAuthoritativeDay(resolve, reject);
+    });
+    const outcomeHolder: { value: ReturnType<typeof applyPriorityArrivalMutation> | null } = { value: null };
+    const transaction = await transact((currentDay) => {
+      outcomeHolder.value = applyPriorityArrivalMutation(currentDay, context, !authoritativeDayExists);
+      return outcomeHolder.value.day;
+    });
+    const outcome = outcomeHolder.value;
+    if (transaction.committed && outcome?.status === "created") {
+      return { status: "created" as const, caseRecord: outcome.caseRecord, committedDay: transaction.value };
+    }
+    if (outcome?.status === "closed") return { status: "closed" as const, caseRecord: null, committedDay: null };
+    return { status: "transaction-conflict" as const, caseRecord: null, committedDay: null };
+  } finally {
+    detachListener();
+  }
+};
+
+const priorityCreatedResponse = (
+  committed: CommittedPriorityArrival,
+  outcome: "created" | "created_but_projection_sync_failed",
+) => ({ ok: true, outcome, ...committed });
+
+export const completePriorityArrivalAfterCommit = async (
+  committed: CommittedPriorityArrival,
+  syncProjection: () => Promise<void>,
+) => {
+  try {
+    await syncProjection();
+    return priorityCreatedResponse(committed, "created");
+  } catch {
+    return priorityCreatedResponse(committed, "created_but_projection_sync_failed");
+  }
+};
+
 const parseInput = (value: unknown): KioskArrivalInput => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
@@ -357,6 +541,24 @@ const isWithinServiceHours = (center: CenterConfig, currentMinutes: number) => {
   return start < end
     ? currentMinutes >= start && currentMinutes < end
     : currentMinutes >= start || currentMinutes < end;
+};
+
+export const resolvePrioritySchedule = (
+  center: CenterConfig,
+  requestedCenterId: string,
+  now: Date,
+) => {
+  if (center.centerId !== requestedCenterId || center.enabled !== true) {
+    return { outcome: "config_unavailable" as const };
+  }
+  try {
+    const localTime = dateTimeInZone(now, center.timezone);
+    return isWithinServiceHours(center, localTime.minutes)
+      ? { outcome: "open" as const, ...localTime }
+      : { outcome: "closed" as const };
+  } catch {
+    return { outcome: "config_unavailable" as const };
+  }
 };
 
 const publicRequirements = (center: CenterConfig, serviceType: ServiceType) =>
@@ -546,6 +748,191 @@ export const createKioskArrival = onCall(
       if (error instanceof HttpsError) throw error;
       console.error("createKioskArrival failed", error);
       throw new HttpsError("internal", "No fue posible crear el turno. Intente nuevamente.");
+    }
+  },
+);
+
+export const createPriorityArrival = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    const startedAt = Date.now();
+    let centerForLog: string | null = null;
+    let windowForLog: number | null = null;
+    let committed = false;
+    let commitRecovery: {
+      committed: boolean;
+      snapshot: { child: (path: string) => { val: () => unknown } } | null;
+      caseId: string;
+      priorityEventId: string;
+      arrivalEventId: string;
+    } | null = null;
+    let committedPayload: CommittedPriorityArrival | null = null;
+    let logged = false;
+    const log = (outcome: string, stage: string) => {
+      if (logged) return;
+      logged = true;
+      try {
+        console.info({
+          operation: "createPriorityArrival", outcome, stage, center: centerForLog,
+          window: windowForLog, transactionCommitted: committed, durationMs: Date.now() - startedAt,
+        });
+      } catch {
+        // Logging must never change the business outcome returned to the operator.
+      }
+    };
+    try {
+      if (!request.auth?.uid) {
+        log("unauthenticated", "authorization");
+        return { ok: false, outcome: "unauthenticated" as const };
+      }
+      if (!isPriorityArrivalInput(request.data)) {
+        log("invalid_priority", "input");
+        return { ok: false, outcome: "invalid_priority" as const };
+      }
+      const centerId = request.data.centerId;
+      const priorityType = request.data.priorityType;
+      centerForLog = centerId;
+      const uid = request.auth.uid;
+      const database = getDatabase();
+      const [profileSnapshot, centerSnapshot] = await Promise.all([
+        database.ref(`users/${uid}`).get(), database.ref(`centers/${centerId}`).get(),
+      ]);
+      if (!profileSnapshot.exists()) {
+        log("unauthorized", "profile");
+        return { ok: false, outcome: "unauthorized" as const };
+      }
+      if (!centerSnapshot.exists()) {
+        log("config_unavailable", "center");
+        return { ok: false, outcome: "config_unavailable" as const };
+      }
+      const profile = profileSnapshot.val() as UserProfile;
+      const center = centerSnapshot.val() as CenterConfig;
+      if (profile.role === "operator-window-1") windowForLog = 1;
+      if (profile.role === "operator-window-2") windowForLog = 2;
+      const assignedWindow = authorizePriorityWindow(profile, uid, centerId, valuesOf(center.windows));
+      if (!assignedWindow) {
+        log("unauthorized", "authority");
+        return { ok: false, outcome: "unauthorized" as const };
+      }
+      const now = new Date();
+      const timestamp = now.getTime();
+      const schedule = resolvePrioritySchedule(center, centerId, now);
+      if (schedule.outcome === "closed") {
+        log("closed", "schedule");
+        return { ok: false, outcome: "closed" as const };
+      }
+      if (schedule.outcome !== "open") {
+        log("config_unavailable", "schedule");
+        return { ok: false, outcome: "config_unavailable" as const };
+      }
+      const traceGroupId = randomUUID();
+      const context: PriorityArrivalContext = {
+        centerId, dayId: schedule.dayId, sessionId: `${centerId}-${schedule.dayId}`,
+        role: profile.role as WindowRole, window: assignedWindow, priorityType, timestamp,
+        caseId: randomUUID(), publicToken: randomUUID(),
+        priorityEventId: `${traceGroupId}-0-priority`,
+        arrivalEventId: `${traceGroupId}-1-arrival`,
+      };
+      const dayReference = database.ref(`days/${centerId}/${schedule.dayId}`);
+      commitRecovery = {
+        committed: false,
+        snapshot: null,
+        caseId: context.caseId,
+        priorityEventId: context.priorityEventId,
+        arrivalEventId: context.arrivalEventId,
+      };
+      priorityArrivalBeforeTransactionTestHook?.();
+      const transaction = await runPriorityArrivalTransaction(
+        (onValue, onError) => {
+          const listener = dayReference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+          return () => dayReference.off("value", listener);
+        },
+        async (update) => {
+          const result = await dayReference.transaction(update, undefined, false);
+          if (result.committed && commitRecovery) {
+            commitRecovery.snapshot = result.snapshot;
+            commitRecovery.committed = true;
+            committed = true;
+            priorityArrivalAfterCommitTestHook?.();
+          }
+          return { committed: result.committed, value: result.snapshot.val() as WindowDay | null };
+        },
+        context,
+      );
+      if (transaction.status === "closed") {
+        log("closed", "transaction");
+        return { ok: false, outcome: "closed" as const };
+      }
+      if (transaction.status !== "created" || !transaction.caseRecord || !transaction.committedDay) {
+        log("transaction_conflict", "transaction");
+        return { ok: false, outcome: "transaction_conflict" as const };
+      }
+      committed = true;
+      const createdCase = transaction.caseRecord;
+      const metadata = transaction.committedDay.metadata;
+      const events = recordOf(transaction.committedDay.events);
+      committedPayload = {
+        createdCase,
+        metadata,
+        events: [events[context.priorityEventId], events[context.arrivalEventId]],
+      };
+      const response = await completePriorityArrivalAfterCommit(committedPayload, async () => {
+        await database.ref().update({
+          [`public/turns/${context.publicToken}`]: {
+            centerId, publicCode: createdCase.publicCode, isPriority: true,
+            status: "Prepare su documentación", serviceType: assignedWindow.serviceType,
+            serviceLabel: assignedWindow.serviceLabel,
+            destination: `Ventanilla ${assignedWindow.windowNumber}`, updatedAt: timestamp,
+            requirements: publicRequirements(center, assignedWindow.serviceType),
+            paymentMethods: publicPaymentMethods(center),
+          },
+          [`public/displays/${centerId}/${schedule.dayId}/cases/${context.caseId}`]: null,
+        });
+      });
+      if (response.outcome === "created_but_projection_sync_failed") {
+        log("created_but_projection_sync_failed", "projection");
+        return response;
+      }
+      log("created", "complete");
+      return response;
+    } catch (error) {
+      if (commitRecovery?.committed) {
+        try {
+          const snapshot = commitRecovery.snapshot;
+          if (snapshot) {
+            committedPayload = {
+              createdCase: snapshot.child(`cases/${commitRecovery.caseId}`).val() as Record<string, unknown>,
+              metadata: snapshot.child("metadata").val(),
+              events: [
+                snapshot.child(`events/${commitRecovery.priorityEventId}`).val(),
+                snapshot.child(`events/${commitRecovery.arrivalEventId}`).val(),
+              ],
+            };
+          }
+        } catch {
+          committedPayload = null;
+        }
+        if (!committedPayload) {
+          log("created_but_projection_sync_failed", "post_commit_recovery");
+          return { ok: true, outcome: "created_but_projection_sync_failed" as const };
+        }
+      }
+      if (committedPayload) {
+        log("created_but_projection_sync_failed", "post_commit");
+        try {
+          console.error({ operation: "createPriorityArrival", category: "post_commit_warning" });
+        } catch {
+          // Preserve duplicate-safe client semantics even if diagnostic output fails.
+        }
+        return priorityCreatedResponse(committedPayload, "created_but_projection_sync_failed");
+      }
+      log("internal_error", "internal");
+      try {
+        console.error({ operation: "createPriorityArrival", category: "internal_error" });
+      } catch {
+        // The controlled client response remains authoritative.
+      }
+      return { ok: false, outcome: "internal_error" as const };
     }
   },
 );

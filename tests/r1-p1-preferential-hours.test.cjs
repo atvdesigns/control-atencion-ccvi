@@ -16,12 +16,38 @@ vm.runInNewContext(compile("src/centerJourneyConfig.ts"), { exports: configExpor
 const transaction = { mode: "commit", projectionFails: false, calls: 0, projectionCalls: 0 };
 const firebase = {
   database: {}, ref: (_database, referencePath) => referencePath,
-  runTransaction: async (_reference, update) => {
+  runTransaction: async () => {
+    throw new Error("Preferential creation must not use a client transaction");
+  },
+  createPriorityArrivalCallable: async (centerId, priorityType) => {
     transaction.calls += 1;
-    const current = { metadata: { status: "open", nextGlobalArrivalSequence: 1, windowSequences: {} }, cases: {}, events: {} };
-    const next = update(current);
-    if (transaction.mode === "abort") return { committed: false, snapshot: { val: () => current } };
-    return { committed: true, snapshot: { val: () => next } };
+    if (transaction.mode === "abort") return { ok: false, outcome: "transaction_conflict" };
+    const now = Date.now();
+    const sessionId = `${centerId}-2026-09-17`;
+    const caseId = `priority-${transaction.calls}`;
+    const createdCase = {
+      caseId, publicToken: `token-${caseId}`, centerId, sessionId, publicCode: `V1-${String(transaction.calls).padStart(2, "0")}`,
+      globalArrivalSequence: transaction.calls, publicSequence: transaction.calls,
+      serviceType: "representation", serviceLabel: "Representación", validationLevel: "enhanced",
+      personKind: "not_specified", assignedWindowId: "window-1", assignedWindowNumber: 1,
+      assignedOperatorId: null, isPriority: true, priorityType, priorityCreatedBy: "operator-window-1",
+      priorityCreatedAt: now, currentState: "waiting_document_validation", arrivalAt: now,
+      calledToWindowAt: null, documentValidationStartedAt: null, documentValidationCompletedAt: null,
+      documentStatus: "pending", optionalInternalNote: null, folderCode: null, paymentQueueNumber: null,
+      paymentTicketId: null, cashierId: null, calledToCashierAt: null, cashierStartedAt: null,
+      paymentCompletedAt: null, completedAt: null, updatedAt: now,
+    };
+    const metadata = {
+      sessionId, centerId, date: "2026-09-17", status: "open", nextGlobalArrivalSequence: transaction.calls + 1,
+      windowSequences: { "window-1": transaction.calls }, consecutivePriorityCasesByWindow: {},
+      consecutivePriorityCasesForCashier: 0, nextFolderNumber: 1, nextPaymentQueueNumber: 1,
+      openedAt: now, closedAt: null,
+    };
+    const events = [
+      { eventId: `priority-${caseId}`, centerId, sessionId, caseId, actorRole: "operator-window-1", actorId: "operator-window-1", action: "priority_created", fromState: "waiting_document_validation", toState: "waiting_document_validation", timestamp: now, optionalNote: priorityType },
+      { eventId: `arrival-${caseId}`, centerId, sessionId, caseId, actorRole: "operator-window-1", actorId: "operator-window-1", action: "arrival_created", fromState: null, toState: "waiting_document_validation", timestamp: now, optionalNote: null },
+    ];
+    return { ok: true, outcome: transaction.projectionFails ? "created_but_projection_sync_failed" : "created", createdCase, metadata, events };
   },
   update: async () => {
     transaction.projectionCalls += 1;
@@ -336,6 +362,10 @@ test("public projection failure remains duplicate-safe", async () => {
   transaction.projectionFails = false;
   assert.equal(result.outcome, "created-public-sync-failed");
   assert.ok(result.createdCase);
+  assert.equal(
+    result.data.events.slice(0, 2).map((event) => event.action).join(","),
+    "priority_created,arrival_created",
+  );
 });
 
 test("closed, aborted and successful creation have explicit outcomes", async () => {

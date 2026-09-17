@@ -2477,8 +2477,8 @@ const OperatorView = ({
                   setData(() => result.data);
                   if (result.outcome === "created" && result.createdCase) {
                     setCreatedPriorityCase(result.createdCase);
-                  } else if (result.outcome === "created-public-sync-failed" && result.createdCase) {
-                    setCreatedPriorityCase(result.createdCase);
+                  } else if (result.outcome === "created-public-sync-failed") {
+                    if (result.createdCase) setCreatedPriorityCase(result.createdCase);
                     onFeedback("El turno fue creado, pero su información pública no pudo sincronizarse. No genere otro turno.");
                   } else if (result.outcome === "center-closed") {
                     onFeedback(`Fuera del horario de atención. Disponible de ${formatServiceHours(center)}.`);

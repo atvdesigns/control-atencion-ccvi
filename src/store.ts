@@ -19,6 +19,7 @@ import {
 } from "./centerJourneyConfig";
 import {
   callNextWindowCaseCallable,
+  createPriorityArrivalCallable,
   type CallNextWindowCaseOutcome,
   database,
   publicDisplayCallEventUpdate,
@@ -830,18 +831,6 @@ export const createPriorityArrivalRealtime = async (
     return { data, createdCase: null, outcome: "stale-context" };
   }
 
-  if (!database) {
-    const nextData = createPriorityArrival(data, serviceType, priorityType, role);
-    const createdCase = Object.values(nextData.cases).find(
-      (caseItem) => !data.cases[caseItem.caseId],
-    ) ?? null;
-    return {
-      data: nextData,
-      createdCase,
-      outcome: createdCase ? "created" : "unexpected-error",
-    };
-  }
-
   const center = getCurrentCenter(data);
   const assignedWindow = firstEnabledWindowFor(center, serviceType);
   if (!assignedWindow || !["operator-window-1", "operator-window-2"].includes(role)) {
@@ -853,175 +842,41 @@ export const createPriorityArrivalRealtime = async (
   if (!isCenterOpenForTickets(center, currentTime)) {
     return { data, createdCase: null, outcome: "center-closed" };
   }
-  const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  if (session.status !== "open") {
-    return { data: base, createdCase: null, outcome: "transaction-not-committed" };
-  }
-
-  const now = currentTime.getTime();
-  const nonce = transactionNonce();
-  const caseId = `${center.shortCode}-${session.date}-${nonce}`;
-  const publicToken = generatePublicToken();
-  const arrivalEventId = `${now}-${transactionNonce()}`;
-  const priorityEventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
-
-  let result;
   try {
-    result = await runTransaction(
-      dayReference,
-      (currentValue: RealtimeOperationalDay | null) => {
-      const currentDay = currentValue ?? {};
-      const currentMetadata = currentDay.metadata ?? {};
-      if (currentMetadata.status === "closed") return;
-
-      const windowSequences = collectionRecord<number>(currentMetadata.windowSequences);
-      const storedSequence = windowSequences[assignedWindow.windowId];
-      const currentSequence =
-        Number.isSafeInteger(storedSequence) && storedSequence >= 0 ? storedSequence : 0;
-      const publicSequence = currentSequence + 1;
-      const publicCode = formatPublicCode(assignedWindow.windowNumber, publicSequence);
-      const storedGlobalSequence = currentMetadata.nextGlobalArrivalSequence;
-      const globalArrivalSequence =
-        typeof storedGlobalSequence === "number" &&
-        Number.isSafeInteger(storedGlobalSequence) &&
-        storedGlobalSequence >= 1
-          ? storedGlobalSequence
-          : 1;
-      const caseRecord: CaseRecord = {
-        caseId,
-        publicToken,
-        centerId: center.centerId,
-        sessionId: session.sessionId,
-        publicCode,
-        globalArrivalSequence,
-        publicSequence,
-        serviceType,
-        serviceLabel: assignedWindow.serviceLabel,
-        validationLevel: assignedWindow.validationLevel,
-        personKind: "not_specified",
-        assignedWindowId: assignedWindow.windowId,
-        assignedWindowNumber: assignedWindow.windowNumber,
-        assignedOperatorId: null,
-        isPriority: true,
-        priorityType,
-        priorityCreatedBy: role,
-        priorityCreatedAt: now,
-        currentState: "waiting_document_validation",
-        arrivalAt: now,
-        calledToWindowAt: null,
-        documentValidationStartedAt: null,
-        documentValidationCompletedAt: null,
-        documentStatus: "pending",
-        optionalInternalNote: null,
-        folderCode: null,
-        paymentQueueNumber: null,
-        paymentTicketId: null,
-        cashierId: null,
-        calledToCashierAt: null,
-        cashierStartedAt: null,
-        paymentCompletedAt: null,
-        completedAt: null,
-        updatedAt: now,
+    const response = await createPriorityArrivalCallable(center.centerId, priorityType);
+    if ((response.outcome === "created" || response.outcome === "created_but_projection_sync_failed") &&
+      response.createdCase && response.metadata && response.events) {
+      const committedCase = response.createdCase;
+      const committedData: AppData = {
+        ...data,
+        sessions: { ...data.sessions, [response.metadata.sessionId]: response.metadata },
+        cases: { ...data.cases, [committedCase.caseId]: committedCase },
+        events: [...response.events, ...data.events],
       };
-      const arrivalEvent: TraceEvent = {
-        eventId: arrivalEventId,
-        centerId: center.centerId,
-        sessionId: session.sessionId,
-        caseId,
-        actorRole: role,
-        actorId: role,
-        action: "arrival_created",
-        fromState: null,
-        toState: "waiting_document_validation",
-        timestamp: now,
-        optionalNote: null,
-      };
-      const priorityEvent: TraceEvent = {
-        eventId: priorityEventId,
-        centerId: center.centerId,
-        sessionId: session.sessionId,
-        caseId,
-        actorRole: role,
-        actorId: role,
-        action: "priority_created",
-        fromState: "waiting_document_validation",
-        toState: "waiting_document_validation",
-        timestamp: now,
-        optionalNote: priorityType,
-      };
-
       return {
-        ...currentDay,
-        metadata: {
-          ...session,
-          ...currentMetadata,
-          sessionId: session.sessionId,
-          centerId: center.centerId,
-          date: session.date,
-          status: "open",
-          nextGlobalArrivalSequence: globalArrivalSequence + 1,
-          windowSequences: {
-            ...windowSequences,
-            [assignedWindow.windowId]: publicSequence,
-          },
-        },
-        cases: {
-          ...collectionRecord<CaseRecord>(currentDay.cases),
-          [caseId]: caseRecord,
-        },
-        events: {
-          ...collectionRecord<TraceEvent>(currentDay.events),
-          [arrivalEventId]: arrivalEvent,
-          [priorityEventId]: priorityEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-      },
-      { applyLocally: false },
-    );
-  } catch {
-    return { data: base, createdCase: null, outcome: "unexpected-error" };
-  }
-
-  if (!result.committed) {
-    return { data: base, createdCase: null, outcome: "transaction-not-committed" };
-  }
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedCase = committedDay?.cases?.[caseId];
-  const committedEvents = collectionRecord<TraceEvent>(committedDay?.events);
-  const arrivalEvent = committedEvents[arrivalEventId];
-  const priorityEvent = committedEvents[priorityEventId];
-  const committedMetadata = committedDay?.metadata;
-  if (!committedCase || !arrivalEvent || !priorityEvent || !committedMetadata) {
-    return { data: base, createdCase: null, outcome: "unexpected-error" };
-  }
-
-  const committedData: AppData = {
-      ...base,
-      sessions: {
-        ...base.sessions,
-        [session.sessionId]: { ...session, ...committedMetadata },
-      },
-      cases: { ...base.cases, [caseId]: committedCase },
-      events: [priorityEvent, arrivalEvent, ...base.events],
-  };
-
-  try {
-    await syncPublicCaseProjection(committedCase, center, session.date);
-  } catch {
+        data: committedData,
+        createdCase: committedCase,
+        outcome: response.outcome === "created" ? "created" : "created-public-sync-failed",
+      };
+    }
+    if (response.outcome === "created_but_projection_sync_failed") {
+      return { data, createdCase: null, outcome: "created-public-sync-failed" };
+    }
+    if (response.outcome === "closed") {
+      return { data, createdCase: null, outcome: "center-closed" };
+    }
+    if (["config_unavailable", "unauthenticated", "unauthorized", "invalid_priority"].includes(response.outcome)) {
+      return { data, createdCase: null, outcome: "config-unavailable" };
+    }
+    if (response.outcome === "transaction_conflict") {
+      return { data, createdCase: null, outcome: "transaction-not-committed" };
+    }
     return {
-      createdCase: committedCase,
-      data: committedData,
-      outcome: "created-public-sync-failed",
+      data, createdCase: null, outcome: "unexpected-error",
     };
+  } catch {
+    return { data, createdCase: null, outcome: "unexpected-error" };
   }
-
-  return {
-    createdCase: committedCase,
-    data: committedData,
-    outcome: "created",
-  };
 };
 
 export const createCenter = (

@@ -29,11 +29,14 @@ import { getPublicJourneyPresentation } from "../publicJourney";
 import type {
   CaseRecord,
   CenterConfig,
+  PriorityType,
   PrivateUserRole,
   PublicDisplayCallEvent,
   PublicDisplayEntry,
   PublicTurnStatus,
   ServiceType,
+  SessionMetadata,
+  TraceEvent,
   UserProfile,
 } from "../types";
 
@@ -88,6 +91,25 @@ export interface CallNextWindowCaseResponse {
   ok: boolean;
   outcome: CallNextWindowCaseOutcome;
   publicCode?: string;
+}
+
+export type CreatePriorityArrivalOutcome =
+  | "created"
+  | "closed"
+  | "config_unavailable"
+  | "unauthenticated"
+  | "unauthorized"
+  | "invalid_priority"
+  | "transaction_conflict"
+  | "created_but_projection_sync_failed"
+  | "internal_error";
+
+export interface CreatePriorityArrivalResponse {
+  ok: boolean;
+  outcome: CreatePriorityArrivalOutcome;
+  createdCase?: CaseRecord;
+  metadata?: SessionMetadata;
+  events?: TraceEvent[];
 }
 
 export interface PublicKioskConfig {
@@ -145,6 +167,30 @@ export const callNextWindowCaseCallable = async (
     (result.data.publicCode !== undefined && typeof result.data.publicCode !== "string")
   ) {
     throw new Error("INVALID_CALL_NEXT_WINDOW_RESPONSE");
+  }
+  return result.data;
+};
+
+export const createPriorityArrivalCallable = async (
+  centerId: string,
+  priorityType: PriorityType,
+): Promise<CreatePriorityArrivalResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<
+    { centerId: string; priorityType: PriorityType },
+    CreatePriorityArrivalResponse
+  >(functions, "createPriorityArrival");
+  const result = await callable({ centerId, priorityType });
+  const outcomes: CreatePriorityArrivalOutcome[] = [
+    "created", "closed", "config_unavailable", "unauthenticated", "unauthorized",
+    "invalid_priority", "transaction_conflict", "created_but_projection_sync_failed", "internal_error",
+  ];
+  if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome)) {
+    throw new Error("INVALID_PRIORITY_ARRIVAL_RESPONSE");
+  }
+  if (result.data.outcome === "created" &&
+    (!result.data.createdCase || !result.data.metadata || !result.data.events)) {
+    throw new Error("INVALID_PRIORITY_ARRIVAL_RESPONSE");
   }
   return result.data;
 };
