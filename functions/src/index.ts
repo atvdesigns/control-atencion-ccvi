@@ -203,32 +203,35 @@ export const applyCallNextWindowMutation = (
 };
 
 export const runCallNextWindowTransaction = async (
-  loadAuthoritativeDay: () => Promise<WindowDay | null>,
+  subscribeToAuthoritativeDay: (
+    onValue: (exists: boolean) => void,
+    onError: (error: unknown) => void,
+  ) => () => void,
   transact: (
     update: (currentDay: WindowDay | null) => WindowDay | undefined,
   ) => Promise<{ committed: boolean; value: WindowDay | null }>,
   context: CallNextWindowContext,
 ) => {
-  if (!await loadAuthoritativeDay()) {
-    return {
-      status: "no-eligible-case" as const,
-      caseId: null,
-      committedDay: null,
-    };
-  }
+  let detachListener = () => {};
+  try {
+    const authoritativeDayExists = await new Promise<boolean>((resolve, reject) => {
+      detachListener = subscribeToAuthoritativeDay(resolve, reject);
+    });
+    if (!authoritativeDayExists) {
+      return {
+        status: "no-eligible-case" as const,
+        caseId: null,
+        committedDay: null,
+      };
+    }
 
-  // RTDB may invoke the first transaction callback with null before its local
-  // cache has received the existing server value. Never treat that value as an
-  // authoritative empty queue and never repopulate it from the preload.
-  const maximumAttempts = 3;
-  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
     const outcomeHolder: {
       value: ReturnType<typeof applyCallNextWindowMutation> | null;
     } = { value: null };
-    let sawTransientNull = false;
+    let transactionStateWasNull = false;
     const transaction = await transact((currentDay) => {
       if (!currentDay) {
-        sawTransientNull = true;
+        transactionStateWasNull = true;
         outcomeHolder.value = null;
         return undefined;
       }
@@ -260,17 +263,17 @@ export const runCallNextWindowTransaction = async (
       };
     }
 
-    if (!sawTransientNull) throw new Error("CALL_NEXT_TRANSACTION_ABORTED");
-    if (!await loadAuthoritativeDay()) {
+    if (transactionStateWasNull) {
       return {
         status: "no-eligible-case" as const,
         caseId: null,
         committedDay: null,
       };
     }
+    throw new Error("CALL_NEXT_TRANSACTION_ABORTED");
+  } finally {
+    detachListener();
   }
-
-  throw new Error("CALL_NEXT_TRANSACTION_STATE_UNAVAILABLE");
 };
 
 export const callNextWindowResponse = (
@@ -553,9 +556,10 @@ export const callNextWindowCase = onCall(
     const startedAt = Date.now();
     let finalOutcomeLogged = false;
     let safeWindow: number | null = null;
+    let failureStage = "request";
     const logFinalOutcome = (
       outcome: string,
-      details: { publicCode?: string } = {},
+      details: { publicCode?: string; stage?: string; errorCategory?: string } = {},
     ) => {
       if (finalOutcomeLogged) return;
       finalOutcomeLogged = true;
@@ -639,12 +643,18 @@ export const callNextWindowCase = onCall(
       const sessionId = `${centerId}-${dayId}`;
       const eventId = randomUUID();
       const dayReference = database.ref(`days/${centerId}/${dayId}`);
+      failureStage = "day_hydration";
       const mutationOutcome = await runCallNextWindowTransaction(
-        async () => {
-          const snapshot = await dayReference.get();
-          return snapshot.exists() ? snapshot.val() as WindowDay : null;
+        (onValue, onError) => {
+          const listener = dayReference.on(
+            "value",
+            (snapshot) => onValue(snapshot.exists()),
+            onError,
+          );
+          return () => dayReference.off("value", listener);
         },
         async (update) => {
+          failureStage = "transaction";
           const transaction = await dayReference.transaction(
             (currentValue) => update(currentValue as WindowDay | null),
             undefined,
@@ -675,6 +685,7 @@ export const callNextWindowCase = onCall(
       if (!committedCase) throw new Error("COMMITTED_CASE_NOT_FOUND");
 
       const destination = `Ventanilla ${committedCase.assignedWindowNumber}`;
+      failureStage = "public_projection";
       await database.ref().update({
         [`public/turns/${committedCase.publicToken}`]: {
           centerId,
@@ -707,7 +718,17 @@ export const callNextWindowCase = onCall(
       logFinalOutcome("called", { publicCode: committedCase.publicCode });
       return callNextWindowResponse("called", committedCase.publicCode);
     } catch (error) {
-      if (!finalOutcomeLogged) logFinalOutcome("internal_error");
+      if (!finalOutcomeLogged) {
+        const errorCategory = error instanceof Error && [
+          "CALL_NEXT_TRANSACTION_INVALID_COMMIT",
+          "CALL_NEXT_TRANSACTION_NOT_COMMITTED",
+          "CALL_NEXT_TRANSACTION_ABORTED",
+          "COMMITTED_CASE_NOT_FOUND",
+        ].includes(error.message)
+          ? error.message.toLowerCase()
+          : "unexpected_error";
+        logFinalOutcome("internal_error", { stage: failureStage, errorCategory });
+      }
       if (error instanceof HttpsError) throw error;
       throw new HttpsError("internal", "No fue posible llamar el siguiente turno. Intente nuevamente.");
     }

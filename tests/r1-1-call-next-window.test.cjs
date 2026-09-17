@@ -195,11 +195,15 @@ const transactionOver = (readCurrent, writeCurrent) => async (update) => {
   writeCurrent(next);
   return { committed: true, value: readCurrent() };
 };
+const authoritativeSubscription = (exists, onDetach = () => {}) => (onValue) => {
+  onValue(exists);
+  return onDetach;
+};
 
 test("genuinely nonexistent authoritative day returns no eligible", async () => {
   let transactions = 0;
   const result = await runCallNextWindowTransaction(
-    async () => null,
+    authoritativeSubscription(false),
     async () => { transactions += 1; throw new Error("transaction must not start"); },
     transactionContext(),
   );
@@ -210,7 +214,7 @@ test("genuinely nonexistent authoritative day returns no eligible", async () => 
 test("existing authoritative day with an empty queue returns no eligible", async () => {
   let current = populatedDay();
   const result = await runCallNextWindowTransaction(
-    async () => current,
+    authoritativeSubscription(true),
     transactionOver(() => current, (next) => { current = next; }),
     transactionContext(),
   );
@@ -220,7 +224,7 @@ test("existing authoritative day with an empty queue returns no eligible", async
 test("populated authoritative day calls an eligible case", async () => {
   let current = populatedDay(makeCase("eligible", false, 1));
   const result = await runCallNextWindowTransaction(
-    async () => current,
+    authoritativeSubscription(true),
     transactionOver(() => current, (next) => { current = next; }),
     transactionContext(),
   );
@@ -229,33 +233,25 @@ test("populated authoritative day calls an eligible case", async () => {
   assert.equal(current.cases.eligible.currentState, "called_to_window");
 });
 
-test("initial transaction null is not classified as no eligible", async () => {
-  let current = populatedDay(makeCase("eligible-after-null", false, 1));
+test("null transaction state after hydration aborts without a fabricated retry", async () => {
   let transactionAttempts = 0;
   const result = await runCallNextWindowTransaction(
-    async () => current,
+    authoritativeSubscription(true),
     async (update) => {
       transactionAttempts += 1;
-      if (transactionAttempts === 1) {
-        assert.equal(update(null), undefined);
-        return { committed: false, value: null };
-      }
-      const next = update(current);
-      current = next;
-      return { committed: true, value: current };
+      assert.equal(update(null), undefined);
+      return { committed: false, value: null };
     },
     transactionContext(),
   );
-  assert.equal(result.status, "called");
-  assert.equal(result.caseId, "eligible-after-null");
-  assert.equal(transactionAttempts, 2);
+  assert.equal(result.status, "no-eligible-case");
+  assert.equal(transactionAttempts, 1);
 });
 
-test("day deleted after preload is not recreated from preloaded data", async () => {
-  const preloaded = populatedDay(makeCase("deleted", false, 1));
-  let loads = 0;
+test("day deleted after hydration is not recreated and listener is detached", async () => {
+  let detachments = 0;
   const result = await runCallNextWindowTransaction(
-    async () => (loads++ === 0 ? preloaded : null),
+    authoritativeSubscription(true, () => { detachments += 1; }),
     async (update) => {
       assert.equal(update(null), undefined);
       return { committed: false, value: null };
@@ -264,6 +260,7 @@ test("day deleted after preload is not recreated from preloaded data", async () 
   );
   assert.equal(result.status, "no-eligible-case");
   assert.equal(result.committedDay, null);
+  assert.equal(detachments, 1);
 });
 
 test("simultaneous calls never commit the same case", async () => {
@@ -283,8 +280,8 @@ test("simultaneous calls never commit the same case", async () => {
     return result;
   };
   const results = await Promise.all([
-    runCallNextWindowTransaction(async () => current, transact, transactionContext({ eventId: "event-a" })),
-    runCallNextWindowTransaction(async () => current, transact, transactionContext({ eventId: "event-b" })),
+    runCallNextWindowTransaction(authoritativeSubscription(true), transact, transactionContext({ eventId: "event-a" })),
+    runCallNextWindowTransaction(authoritativeSubscription(true), transact, transactionContext({ eventId: "event-b" })),
   ]);
   const called = results.filter((result) => result.status === "called");
   assert.equal(called.length, 1);
@@ -296,7 +293,7 @@ test("transaction retry recomputes selection from current state", async () => {
   const second = makeCase("second", false, 2);
   let current = populatedDay(first, second);
   const result = await runCallNextWindowTransaction(
-    async () => current,
+    authoritativeSubscription(true),
     async (update) => {
       const staleResult = update(current);
       assert.equal(staleResult.cases.first.currentState, "called_to_window");
@@ -319,7 +316,7 @@ test("Window 2 transaction only selects its own queue", async () => {
   });
   let current = populatedDay(makeCase("window-one", false, 1), windowTwoCase);
   const result = await runCallNextWindowTransaction(
-    async () => current,
+    authoritativeSubscription(true),
     transactionOver(() => current, (next) => { current = next; }),
     transactionContext({ windowId: "window-2", role: "operator-window-2" }),
   );
