@@ -53,6 +53,7 @@ interface UserProfile {
   centerIds: string[];
   centerAccess: Record<string, true>;
   enabled: boolean;
+  windowId?: string;
 }
 
 interface WindowCase {
@@ -178,6 +179,19 @@ interface CommittedDocumentValidation {
   events: unknown[];
   metadata: Record<string, unknown> | null;
   paymentItem: Record<string, unknown> | null;
+}
+
+type DocumentationWaitOperation = "pause" | "resume";
+interface DocumentationWaitContext {
+  centerId: string;
+  sessionId: string;
+  caseId: string;
+  windowId: string;
+  role: WindowRole;
+  uid: string;
+  operation: DocumentationWaitOperation;
+  timestamp: number;
+  eventId: string;
 }
 
 let priorityArrivalAfterCommitTestHook: (() => void) | null = null;
@@ -433,6 +447,25 @@ export const authorizePriorityWindow = (
   if (!windowNumber) return null;
   const windowItem = windows.find((item) => item.windowNumber === windowNumber && item.enabled === true);
   return windowItem && windowItem.windowId && /^V[1-9]\d*$/.test(windowItem.publicCodePrefix) &&
+    serviceTypes.includes(windowItem.serviceType) && typeof windowItem.serviceLabel === "string" &&
+    ["enhanced", "standard"].includes(windowItem.validationLevel) ? windowItem : null;
+};
+
+export const authorizeDocumentationWindow = (
+  profile: UserProfile | null,
+  uid: string,
+  centerId: string,
+  windows: CenterWindow[],
+) => {
+  if (!profile || profile.uid !== uid || profile.enabled !== true) return null;
+  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) return null;
+  if (profile.role !== "operator-window-1" && profile.role !== "operator-window-2") return null;
+  const explicitWindowId = typeof profile.windowId === "string" && profile.windowId ? profile.windowId : null;
+  const legacyWindowNumber = profile.role === "operator-window-1" ? 1 : 2;
+  const windowItem = explicitWindowId
+    ? windows.find((item) => item.windowId === explicitWindowId)
+    : windows.find((item) => item.windowNumber === legacyWindowNumber);
+  return windowItem?.enabled === true && windowItem.windowId &&
     serviceTypes.includes(windowItem.serviceType) && typeof windowItem.serviceLabel === "string" &&
     ["enhanced", "standard"].includes(windowItem.validationLevel) ? windowItem : null;
 };
@@ -841,6 +874,112 @@ export const executeReassignWindowCase = async (
     committed,
     () => syncProjection(committed),
   );
+};
+
+export const applyDocumentationWaitMutation = (
+  currentDay: WindowDay | null,
+  context: DocumentationWaitContext,
+) => {
+  if (!currentDay) return { status: "case_not_found" as const, day: undefined, caseRecord: null, event: null };
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const current = cases[context.caseId];
+  if (!current) return { status: "case_not_found" as const, day: undefined, caseRecord: null, event: null };
+  if (current.centerId !== context.centerId || current.sessionId !== context.sessionId ||
+    current.assignedWindowId !== context.windowId || current.assignedOperatorId !== context.role) {
+    return { status: "unauthorized" as const, day: undefined, caseRecord: null, event: null };
+  }
+  const expectedState = context.operation === "pause" ? "in_document_validation" : "waiting_documentation";
+  if (current.currentState !== expectedState) {
+    return { status: "invalid_case_state" as const, day: undefined, caseRecord: null, event: null };
+  }
+  if (context.operation === "resume") {
+    const hasActiveCase = Object.values(cases).some((item) =>
+      item.caseId !== current.caseId && item.centerId === context.centerId &&
+      item.sessionId === context.sessionId && item.assignedWindowId === context.windowId &&
+      ["called_to_window", "in_document_validation"].includes(item.currentState));
+    if (hasActiveCase) {
+      return { status: "active_case_exists" as const, day: undefined, caseRecord: null, event: null };
+    }
+  }
+  const waitingSince = typeof current.documentationWaitingSince === "number"
+    ? current.documentationWaitingSince : null;
+  const nextState = context.operation === "pause" ? "waiting_documentation" : "in_document_validation";
+  const nextCase: WindowCase = {
+    ...current,
+    currentState: nextState,
+    documentationWaitingSince: context.operation === "pause" ? context.timestamp : null,
+    updatedAt: context.timestamp,
+  };
+  const event = {
+    eventId: context.eventId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: context.caseId, actorRole: context.role, actorId: context.uid,
+    action: context.operation === "pause" ? "documentation_wait_started" : "documentation_wait_resumed",
+    fromState: current.currentState, toState: nextState, timestamp: context.timestamp, optionalNote: null,
+    ...(context.operation === "resume" && waitingSince !== null
+      ? { documentationWaitingSince: waitingSince, documentationWaitDurationMs: Math.max(0, context.timestamp - waitingSince) }
+      : {}),
+  };
+  return {
+    status: event.action as "documentation_wait_started" | "documentation_wait_resumed",
+    caseRecord: nextCase,
+    event,
+    day: {
+      ...currentDay,
+      cases: { ...cases, [context.caseId]: nextCase },
+      events: { ...recordOf(currentDay.events), [context.eventId]: event },
+    } as WindowDay,
+  };
+};
+
+export const runDocumentationWaitTransaction = async (
+  subscribeToAuthoritativeDay: (onValue: (exists: boolean) => void, onError: (error: unknown) => void) => () => void,
+  transact: (update: (currentDay: WindowDay | null) => WindowDay | undefined) =>
+    Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: DocumentationWaitContext,
+) => {
+  let detach = () => {};
+  try {
+    const exists = await new Promise<boolean>((resolve, reject) => {
+      detach = subscribeToAuthoritativeDay(resolve, reject);
+    });
+    if (!exists) return { status: "case_not_found" as const, caseRecord: null, event: null };
+    const holder: { value: ReturnType<typeof applyDocumentationWaitMutation> | null } = { value: null };
+    const transaction = await transact((day) => {
+      holder.value = applyDocumentationWaitMutation(day, context);
+      return holder.value.day;
+    });
+    const result = holder.value;
+    if (transaction.committed && result?.caseRecord && result.event) {
+      return { status: result.status, caseRecord: result.caseRecord, event: result.event };
+    }
+    return { status: result?.status ?? "conflict" as const, caseRecord: null, event: null };
+  } finally {
+    detach();
+  }
+};
+
+export const executeDocumentationWait = async (
+  subscribeToAuthoritativeDay: (onValue: (exists: boolean) => void, onError: (error: unknown) => void) => () => void,
+  transact: (update: (currentDay: WindowDay | null) => WindowDay | undefined) =>
+    Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: DocumentationWaitContext,
+  syncProjection: (committed: { caseRecord: WindowCase; event: unknown }) => Promise<void>,
+  onCommitted: (committed: { caseRecord: WindowCase; event: unknown }) => void = () => {},
+) => {
+  const result = await runDocumentationWaitTransaction(subscribeToAuthoritativeDay, transact, context);
+  if (!result.caseRecord || !result.event) return { ok: false, outcome: result.status };
+  const committed = { caseRecord: result.caseRecord, event: result.event };
+  onCommitted(committed);
+  try {
+    await syncProjection(committed);
+    return { ok: true, outcome: result.status, ...committed };
+  } catch {
+    return {
+      ok: true,
+      outcome: context.operation === "pause" ? "documentation_wait_projection_failed" as const : "documentation_resume_projection_failed" as const,
+      ...committed,
+    };
+  }
 };
 
 const padOperationalNumber = (value: number) => String(value).padStart(3, "0");
@@ -1798,6 +1937,101 @@ export const finishWindowDocumentValidation = onCall(
     }
   },
 );
+
+const createDocumentationWaitCallable = (operation: DocumentationWaitOperation) => onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    const startedAt = Date.now();
+    let centerForLog: string | null = null;
+    let windowForLog: number | null = null;
+    const committedHolder: { value: { caseRecord: WindowCase; event: unknown } | null } = { value: null };
+    const log = (outcome: string) => {
+      try {
+        console.info({ operation: operation === "pause" ? "pauseWindowForDocumentation" : "resumeWindowDocumentation",
+          outcome, center: centerForLog, window: windowForLog,
+          transactionCommitted: Boolean(committedHolder.value), durationMs: Date.now() - startedAt });
+      } catch { /* logging cannot alter the result */ }
+    };
+    try {
+      if (!request.auth?.uid) { log("unauthenticated"); return { ok: false, outcome: "unauthenticated" as const }; }
+      const input = request.data as Record<string, unknown> | null;
+      if (!input || Array.isArray(input) || Object.keys(input).length !== 2 ||
+        typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
+        typeof input.caseId !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(input.caseId)) {
+        log("invalid_request"); return { ok: false, outcome: "invalid_request" as const };
+      }
+      const centerId = input.centerId;
+      const caseId = input.caseId;
+      const uid = request.auth.uid;
+      centerForLog = centerId;
+      const database = getDatabase();
+      const [profileSnapshot, centerSnapshot] = await Promise.all([
+        database.ref(`users/${uid}`).get(), database.ref(`centers/${centerId}`).get(),
+      ]);
+      if (!profileSnapshot.exists()) { log("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      if (!centerSnapshot.exists()) { log("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const profile = profileSnapshot.val() as UserProfile;
+      const center = centerSnapshot.val() as CenterConfig;
+      const windowItem = authorizeDocumentationWindow(profile, uid, centerId, valuesOf(center.windows));
+      if (!windowItem) { log("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      windowForLog = windowItem.windowNumber;
+      if (center.centerId !== centerId || center.enabled !== true) {
+        log("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const };
+      }
+      let dayId: string;
+      try { dayId = dateTimeInZone(new Date(), center.timezone).dayId; }
+      catch { log("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const reference = database.ref(`days/${centerId}/${dayId}`);
+      const response = await executeDocumentationWait(
+        (onValue, onError) => {
+          const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+          return () => reference.off("value", listener);
+        },
+        async (update) => {
+          const tx = await reference.transaction(update, undefined, false);
+          return { committed: tx.committed, value: tx.snapshot.val() as WindowDay | null };
+        },
+        {
+          centerId, sessionId: `${centerId}-${dayId}`, caseId, windowId: windowItem.windowId,
+          role: profile.role as WindowRole, uid, operation, timestamp: Date.now(), eventId: randomUUID(),
+        },
+        async ({ caseRecord }) => {
+          const waiting = operation === "pause";
+          await database.ref().update({
+            [`public/turns/${caseRecord.publicToken}`]: {
+              centerId, publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority,
+              status: waiting ? "Documentación pendiente" : "Atención en ventanilla",
+              serviceType: caseRecord.serviceType, serviceLabel: caseRecord.serviceLabel,
+              destination: `Ventanilla ${caseRecord.assignedWindowNumber}`,
+              updatedAt: caseRecord.updatedAt, requirements: publicRequirements(center, caseRecord.serviceType),
+              paymentMethods: publicPaymentMethods(center),
+            },
+            [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: waiting ? null : {
+              publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority,
+              status: "Atención en ventanilla", destination: `Ventanilla ${caseRecord.assignedWindowNumber}`,
+              updatedAt: caseRecord.updatedAt,
+            },
+          });
+        },
+        (committed) => { committedHolder.value = committed; },
+      );
+      log(response.outcome);
+      return response;
+    } catch {
+      const committed = committedHolder.value;
+      if (committed) {
+        const outcome = operation === "pause" ? "documentation_wait_projection_failed" as const : "documentation_resume_projection_failed" as const;
+        log(outcome);
+        return { ok: true, outcome, ...committed };
+      }
+      log("internal_error");
+      return { ok: false, outcome: "internal_error" as const };
+    }
+  },
+);
+
+export const pauseWindowForDocumentation = createDocumentationWaitCallable("pause");
+export const resumeWindowDocumentation = createDocumentationWaitCallable("resume");
 
 export const reassignWindowCase = onCall(
   { region: "us-central1", enforceAppCheck: false },

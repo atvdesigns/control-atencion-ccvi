@@ -13,6 +13,7 @@ export const PUBLIC_JOURNEY_STEP_BY_STATE: Record<CaseState, number> = {
   waiting_document_validation: 1,
   called_to_window: 2,
   in_document_validation: 2,
+  waiting_documentation: 2,
   documentation_incomplete: 2,
   rejected: 2,
   no_show: 2,
@@ -74,6 +75,13 @@ export const getPublicJourneyPresentation = (
       return {
         title: "Atención en ventanilla",
         description: "El personal está revisando su documentación.",
+        destination: windowDestination,
+        isExceptional: false,
+      };
+    case "waiting_documentation":
+      return {
+        title: "Documentación pendiente",
+        description: "Complete la documentación solicitada y vuelva a la ventanilla para retomar su atención.",
         destination: windowDestination,
         isExceptional: false,
       };

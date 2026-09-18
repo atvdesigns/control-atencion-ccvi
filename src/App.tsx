@@ -108,8 +108,10 @@ import {
   removeCasePriorityRealtime,
   markNoShowRealtime,
   pausePaymentRealtime,
+  pauseWindowDocumentationRealtime,
   reassignCaseRealtime,
   resumePausedPaymentRealtime,
+  resumeWindowDocumentationRealtime,
   roleLabels,
   saveData,
   updateCasePriorityRealtime,
@@ -121,6 +123,7 @@ import {
   finishDocumentValidationRealtime,
   updateCenter,
   windowForRole,
+  windowForOperatorProfile,
 } from "./store";
 import {
   applyOperationalDataContextChange,
@@ -170,6 +173,7 @@ const statusColors: Record<string, string> = {
   waiting_document_validation: ccviPalette.orange,
   called_to_window: ccviPalette.orange,
   in_document_validation: ccviPalette.petroleum,
+  waiting_documentation: ccviPalette.warning,
   documentation_incomplete: ccviPalette.warning,
   rejected: ccviPalette.error,
   waiting_cashier: "#1B75BB",
@@ -185,6 +189,8 @@ const traceEventLabels: Record<string, string> = {
   validation_started: "Revisión documental iniciada",
   window_no_show: "Persona no se presentó en ventanilla",
   documentation_incomplete: "Documentación marcada como incompleta",
+  documentation_wait_started: "Espera por documentación iniciada",
+  documentation_wait_resumed: "Atención documental retomada",
   case_rejected: "Trámite rechazado",
   folder_code_generated: "Código de carpeta generado",
   added_to_cashier_queue: "Turno enviado a cola de caja",
@@ -1697,7 +1703,7 @@ const OperatorView = ({
   operationalConfigContext,
   getCurrentOperationalConfig,
 }: {
-  operatorWindow: NonNullable<ReturnType<typeof windowForRole>>;
+  operatorWindow: NonNullable<ReturnType<typeof windowForOperatorProfile>>;
   role: Role;
   data: AppData;
   setData: (updater: (data: AppData) => AppData) => void;
@@ -1713,6 +1719,7 @@ const OperatorView = ({
   const [priorityRemovalCase, setPriorityRemovalCase] = useState<CaseRecord | null>(null);
   const [selectedPriorityType, setSelectedPriorityType] = useState<PriorityType | "">("");
   const [rejectionDialogCase, setRejectionDialogCase] = useState<CaseRecord | null>(null);
+  const [incompleteDecisionCase, setIncompleteDecisionCase] = useState<CaseRecord | null>(null);
   const [rejectedCustomerName, setRejectedCustomerName] = useState("");
   const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
   const [isCallingNext, setIsCallingNext] = useState(false);
@@ -1757,12 +1764,16 @@ const OperatorView = ({
     .sort((a, b) => a.arrivalAt - b.arrivalAt);
   const activeCase = queue.find((caseItem) => caseItem.currentState !== "waiting_document_validation");
   const waitingCases = queue.filter((caseItem) => caseItem.currentState === "waiting_document_validation");
+  const documentationWaitingCases = Object.values(data.cases)
+    .filter((caseItem) => caseItem.centerId === data.selectedCenterId &&
+      caseItem.assignedWindowId === operatorWindow.windowId && caseItem.currentState === "waiting_documentation")
+    .sort((a, b) => (a.documentationWaitingSince ?? a.updatedAt) - (b.documentationWaitingSince ?? b.updatedAt));
   const processed = Object.values(data.cases)
     .filter(
       (caseItem) =>
         caseItem.centerId === data.selectedCenterId &&
         caseItem.assignedWindowId === operatorWindow.windowId &&
-        !["waiting_document_validation", "called_to_window", "in_document_validation"].includes(
+        !["waiting_document_validation", "called_to_window", "in_document_validation", "waiting_documentation"].includes(
           caseItem.currentState,
         ),
     )
@@ -2126,20 +2137,7 @@ const OperatorView = ({
                       <Button
                         variant="outlined"
                         color="warning"
-                        onClick={async () => {
-                          await executeCallNextWindow({
-                            pendingRef: windowTransitionPendingRef,
-                            setLoading: setIsWindowTransitionPending,
-                            request: () => finishDocumentValidationRealtime(
-                              data,
-                              activeCase.caseId,
-                              "incomplete",
-                              role,
-                            ),
-                            onResult: (next) => setData(() => next),
-                            onError: () => onFeedback("No pudimos registrar la documentación incompleta. Intente nuevamente."),
-                          });
-                        }}
+                        onClick={() => setIncompleteDecisionCase(activeCase)}
                         disabled={isWindowTransitionPending}
                       >
                         Incompleto
@@ -2235,6 +2233,69 @@ const OperatorView = ({
                 </Grid2>
               ))}
             </Grid2>
+          </AccordionDetails>
+        </Accordion>
+
+        <Accordion defaultExpanded disableGutters sx={operatorAccordionSx}>
+          <AccordionSummary
+            expandIcon={<ExpandMore />}
+            aria-label={`En espera por documentación, ${documentationWaitingCases.length} turnos`}
+            sx={{ ...accordionSummarySx, px: { xs: 2, md: 2.5 }, py: 1.25 }}
+          >
+            <Stack direction="row" alignItems="center" spacing={1.25}>
+              <Box sx={{ width: 36, height: 36, borderRadius: "50%", bgcolor: "rgba(237, 108, 2, 0.14)",
+                color: ccviPalette.warning, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <AssignmentTurnedIn />
+              </Box>
+              <Typography variant="h5">En espera</Typography>
+              <CountBadge count={documentationWaitingCases.length} label="turnos esperando documentación" />
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails sx={operatorAccordionDetailsSx}>
+            <Stack spacing={1.5}>
+              {activeCase && documentationWaitingCases.length > 0 && (
+                <Alert severity="info">
+                  Finalice o libere la atención actual antes de retomar un turno en espera.
+                </Alert>
+              )}
+              {documentationWaitingCases.length === 0 && (
+                <EmptyState text="No hay turnos esperando documentación en esta ventanilla." />
+              )}
+              <Grid2 container spacing={1.5}>
+                {documentationWaitingCases.map((caseItem) => (
+                  <Grid2 size={{ xs: 12, md: 6 }} key={caseItem.caseId}>
+                    <CaseCard caseItem={caseItem} center={center} compact showPriorityLabel operatorStyle>
+                      <Stack spacing={1.25}>
+                        <Typography color="text.secondary">Documentación incompleta</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          En espera hace {formatDuration(Math.max(0, scheduleNow.getTime() -
+                            (caseItem.documentationWaitingSince ?? caseItem.updatedAt)))}
+                        </Typography>
+                        <Button
+                          variant="contained"
+                          disabled={Boolean(activeCase) || isWindowTransitionPending}
+                          onClick={async () => {
+                            if (activeCase) {
+                              onFeedback("Finalice la atención actual antes de retomar este turno.");
+                              return;
+                            }
+                            await executeCallNextWindow({
+                              pendingRef: windowTransitionPendingRef,
+                              setLoading: setIsWindowTransitionPending,
+                              request: () => resumeWindowDocumentationRealtime(data, caseItem.caseId, role),
+                              onResult: (next) => setData(() => next),
+                              onError: () => onFeedback("No pudimos retomar la atención. Intente nuevamente."),
+                            });
+                          }}
+                        >
+                          Retomar atención
+                        </Button>
+                      </Stack>
+                    </CaseCard>
+                  </Grid2>
+                ))}
+              </Grid2>
+            </Stack>
           </AccordionDetails>
         </Accordion>
 
@@ -2595,6 +2656,65 @@ const OperatorView = ({
             }}
           >
             Quitar atención preferencial
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={Boolean(incompleteDecisionCase)}
+        onClose={() => !isWindowTransitionPending && setIncompleteDecisionCase(null)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Documentación incompleta</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography>
+              Seleccione cómo continuará la atención de este turno.
+            </Typography>
+            <Alert severity="info">
+              Poner en espera conserva el mismo turno para que la persona pueda regresar con la documentación faltante.
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              Finalizar atención cerrará el trámite actual por documentación incompleta.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1, flexWrap: "wrap" }}>
+          <Button disabled={isWindowTransitionPending} onClick={() => setIncompleteDecisionCase(null)}>Cancelar</Button>
+          <Button
+            variant="outlined"
+            disabled={isWindowTransitionPending}
+            onClick={async () => {
+              if (!incompleteDecisionCase) return;
+              const caseId = incompleteDecisionCase.caseId;
+              await executeCallNextWindow({
+                pendingRef: windowTransitionPendingRef,
+                setLoading: setIsWindowTransitionPending,
+                request: () => pauseWindowDocumentationRealtime(data, caseId, role),
+                onResult: (next) => { setData(() => next); setIncompleteDecisionCase(null); },
+                onError: () => onFeedback("No pudimos poner el turno en espera. Intente nuevamente."),
+              });
+            }}
+          >
+            Poner en espera
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            disabled={isWindowTransitionPending}
+            onClick={async () => {
+              if (!incompleteDecisionCase) return;
+              const caseId = incompleteDecisionCase.caseId;
+              await executeCallNextWindow({
+                pendingRef: windowTransitionPendingRef,
+                setLoading: setIsWindowTransitionPending,
+                request: () => finishDocumentValidationRealtime(data, caseId, "incomplete", role),
+                onResult: (next) => { setData(() => next); setIncompleteDecisionCase(null); },
+                onError: () => onFeedback("No pudimos registrar la documentación incompleta. Intente nuevamente."),
+              });
+            }}
+          >
+            Finalizar atención
           </Button>
         </DialogActions>
       </Dialog>
@@ -5060,7 +5180,9 @@ const App = () => {
     : privateData;
 
   const activeOperatorWindow = effectiveRole.startsWith("operator")
-    ? windowForRole(getCurrentCenter(operatorData), effectiveRole)
+    ? windowForOperatorProfile(getCurrentCenter(operatorData), authenticatedProfile
+      ? { role: authenticatedProfile.role, windowId: authenticatedProfile.windowId }
+      : { role: effectiveRole })
     : null;
 
   return (

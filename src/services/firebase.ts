@@ -203,6 +203,28 @@ export interface FinishWindowDocumentResponse {
   paymentItem?: PaymentQueueItem | null;
 }
 
+export type DocumentationWaitOutcome =
+  | "documentation_wait_started"
+  | "documentation_wait_resumed"
+  | "documentation_wait_projection_failed"
+  | "documentation_resume_projection_failed"
+  | "case_not_found"
+  | "unauthenticated"
+  | "unauthorized"
+  | "invalid_request"
+  | "invalid_case_state"
+  | "active_case_exists"
+  | "conflict"
+  | "config_unavailable"
+  | "internal_error";
+
+export interface DocumentationWaitResponse {
+  ok: boolean;
+  outcome: DocumentationWaitOutcome;
+  caseRecord?: CaseRecord;
+  event?: TraceEvent;
+}
+
 export interface PublicKioskConfig {
   centerId: string;
   enabled: boolean;
@@ -392,6 +414,33 @@ export const finishWindowDocumentValidationCallable = async (
   return result.data;
 };
 
+const documentationWaitCallable = async (
+  name: "pauseWindowForDocumentation" | "resumeWindowDocumentation",
+  centerId: string,
+  caseId: string,
+): Promise<DocumentationWaitResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<{ centerId: string; caseId: string }, DocumentationWaitResponse>(functions, name);
+  const result = await callable({ centerId, caseId });
+  const outcomes: DocumentationWaitOutcome[] = [
+    "documentation_wait_started", "documentation_wait_resumed",
+    "documentation_wait_projection_failed", "documentation_resume_projection_failed",
+    "case_not_found", "unauthenticated", "unauthorized", "invalid_request",
+    "invalid_case_state", "active_case_exists", "conflict", "config_unavailable", "internal_error",
+  ];
+  if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome) ||
+    (result.data.ok && (!result.data.caseRecord || !result.data.event))) {
+    throw new Error("INVALID_DOCUMENTATION_WAIT_RESPONSE");
+  }
+  return result.data;
+};
+
+export const pauseWindowForDocumentationCallable = (centerId: string, caseId: string) =>
+  documentationWaitCallable("pauseWindowForDocumentation", centerId, caseId);
+
+export const resumeWindowDocumentationCallable = (centerId: string, caseId: string) =>
+  documentationWaitCallable("resumeWindowDocumentation", centerId, caseId);
+
 const configuredUsernameDomain =
   import.meta.env.VITE_FIREBASE_USERNAME_DOMAIN?.trim().toLowerCase();
 const authUsernameDomain =
@@ -447,7 +496,8 @@ export const getUserProfileRealtime = async (
     !Object.values(value.centerAccess).every((allowed) => allowed === true) ||
     !value.centerIds.every((centerId) => value.centerAccess?.[centerId] === true) ||
     typeof value.enabled !== "boolean" ||
-    (value.cashierId !== undefined && typeof value.cashierId !== "string")
+    (value.cashierId !== undefined && typeof value.cashierId !== "string") ||
+    (value.windowId !== undefined && typeof value.windowId !== "string")
   ) {
     return null;
   }

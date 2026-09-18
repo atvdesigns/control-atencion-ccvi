@@ -9,6 +9,7 @@ export type CaseState =
   | "waiting_document_validation"
   | "called_to_window"
   | "in_document_validation"
+  | "waiting_documentation"
   | "documentation_incomplete"
   | "rejected"
   | "approved_for_cashier"
@@ -65,6 +66,7 @@ export interface UserProfile {
   centerIds: string[];
   centerAccess: Record<string, true>;
   cashierId?: string;
+  windowId?: string;
   enabled: boolean;
 }
 
@@ -203,6 +205,7 @@ export interface CaseRecord {
   calledToWindowAt: number | null;
   documentValidationStartedAt: number | null;
   documentValidationCompletedAt: number | null;
+  documentationWaitingSince?: number | null;
   documentStatus: DocumentStatus;
   rejectedCustomerName?: string;
   rejectedCustomerPhone?: string;

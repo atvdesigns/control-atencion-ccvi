@@ -24,6 +24,8 @@ import {
   markWindowCaseNoShowCallable,
   reassignWindowCaseCallable,
   startWindowValidationCallable,
+  pauseWindowForDocumentationCallable,
+  resumeWindowDocumentationCallable,
   updateCasePriorityCallable,
   type CallNextWindowCaseOutcome,
   database,
@@ -269,6 +271,7 @@ export const stateLabels: Record<string, string> = {
   called_to_window: "Diríjase a ventanilla",
   in_document_validation: "Documentación en revisión",
   documentation_incomplete: "Documentación incompleta",
+  waiting_documentation: "Documentación pendiente",
   rejected: "Trámite no aprobado",
   approved_for_cashier: "Documentación aprobada",
   waiting_cashier: "En espera de caja",
@@ -514,6 +517,17 @@ export const windowForRole = (center: CenterConfig, role: Role) => {
   const windowNumber = role === "operator-window-1" ? 1 : role === "operator-window-2" ? 2 : null;
   if (!windowNumber) return null;
   return center.windows.find((windowItem) => windowItem.windowNumber === windowNumber) ?? null;
+};
+
+export const windowForOperatorProfile = (
+  center: CenterConfig,
+  profile: { role: Role; windowId?: string } | null,
+) => {
+  if (!profile) return null;
+  if (profile.windowId) {
+    return center.windows.find((windowItem) => windowItem.windowId === profile.windowId && windowItem.enabled) ?? null;
+  }
+  return windowForRole(center, profile.role);
 };
 
 export const createArrival = (data: AppData, serviceType: ServiceType): AppData => {
@@ -1521,6 +1535,82 @@ export const finishDocumentValidationRealtime = async (
       [response.paymentItem.queueItemId]: response.paymentItem,
     },
   };
+};
+
+export const pauseWindowDocumentation = (
+  data: AppData,
+  caseId: string,
+  role: Role,
+): AppData => {
+  const current = data.cases[caseId];
+  if (!current || current.currentState !== "in_document_validation") return data;
+  const now = Date.now();
+  return transitionCase(
+    data,
+    caseId,
+    { currentState: "waiting_documentation", documentationWaitingSince: now },
+    "documentation_wait_started",
+    role,
+  );
+};
+
+export const resumeWindowDocumentation = (
+  data: AppData,
+  caseId: string,
+  role: Role,
+): AppData => {
+  const current = data.cases[caseId];
+  if (!current || current.currentState !== "waiting_documentation") return data;
+  const hasActive = Object.values(data.cases).some((item) =>
+    item.caseId !== caseId && item.centerId === current.centerId &&
+    item.sessionId === current.sessionId && item.assignedWindowId === current.assignedWindowId &&
+    ["called_to_window", "in_document_validation"].includes(item.currentState));
+  if (hasActive) return data;
+  return transitionCase(
+    data,
+    caseId,
+    { currentState: "in_document_validation", documentationWaitingSince: null },
+    "documentation_wait_resumed",
+    role,
+  );
+};
+
+const mergeDocumentationWaitResponse = (
+  base: AppData,
+  response: Awaited<ReturnType<typeof pauseWindowForDocumentationCallable>>,
+) => {
+  if (!response.ok || !response.caseRecord || !response.event) throw new Error(response.outcome);
+  return {
+    ...base,
+    cases: { ...base.cases, [response.caseRecord.caseId]: response.caseRecord },
+    events: [response.event, ...base.events],
+  };
+};
+
+export const pauseWindowDocumentationRealtime = async (
+  data: AppData,
+  caseId: string,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) return pauseWindowDocumentation(data, caseId, role);
+  const base = ensureSession(data);
+  return mergeDocumentationWaitResponse(
+    base,
+    await pauseWindowForDocumentationCallable(base.selectedCenterId, caseId),
+  );
+};
+
+export const resumeWindowDocumentationRealtime = async (
+  data: AppData,
+  caseId: string,
+  role: Role,
+): Promise<AppData> => {
+  if (!database) return resumeWindowDocumentation(data, caseId, role);
+  const base = ensureSession(data);
+  return mergeDocumentationWaitResponse(
+    base,
+    await resumeWindowDocumentationCallable(base.selectedCenterId, caseId),
+  );
 };
 
 const cashierFifo = (a: PaymentQueueItem, b: PaymentQueueItem) =>
