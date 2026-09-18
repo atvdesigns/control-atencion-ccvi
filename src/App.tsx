@@ -2106,14 +2106,20 @@ const OperatorView = ({
                       <Button
                         variant="contained"
                         onClick={async () => {
-                          const next = await finishDocumentValidationRealtime(
-                            data,
-                            activeCase.caseId,
-                            "approved",
-                            role,
-                          );
-                          setData(() => next);
+                          await executeCallNextWindow({
+                            pendingRef: windowTransitionPendingRef,
+                            setLoading: setIsWindowTransitionPending,
+                            request: () => finishDocumentValidationRealtime(
+                              data,
+                              activeCase.caseId,
+                              "approved",
+                              role,
+                            ),
+                            onResult: (next) => setData(() => next),
+                            onError: () => onFeedback("No pudimos aprobar la documentación. Intente nuevamente."),
+                          });
                         }}
+                        disabled={isWindowTransitionPending}
                       >
                         Aprobar
                       </Button>
@@ -2121,14 +2127,20 @@ const OperatorView = ({
                         variant="outlined"
                         color="warning"
                         onClick={async () => {
-                          const next = await finishDocumentValidationRealtime(
-                            data,
-                            activeCase.caseId,
-                            "incomplete",
-                            role,
-                          );
-                          setData(() => next);
+                          await executeCallNextWindow({
+                            pendingRef: windowTransitionPendingRef,
+                            setLoading: setIsWindowTransitionPending,
+                            request: () => finishDocumentValidationRealtime(
+                              data,
+                              activeCase.caseId,
+                              "incomplete",
+                              role,
+                            ),
+                            onResult: (next) => setData(() => next),
+                            onError: () => onFeedback("No pudimos registrar la documentación incompleta. Intente nuevamente."),
+                          });
                         }}
+                        disabled={isWindowTransitionPending}
                       >
                         Incompleto
                       </Button>
@@ -2136,6 +2148,7 @@ const OperatorView = ({
                         variant="outlined"
                         color="error"
                         onClick={() => setRejectionDialogCase(activeCase)}
+                        disabled={isWindowTransitionPending}
                       >
                         Rechazar
                       </Button>
@@ -2635,7 +2648,7 @@ const OperatorView = ({
           <Button
             variant="contained"
             color="error"
-            disabled={rejectedPhoneIsInvalid}
+            disabled={rejectedPhoneIsInvalid || isWindowTransitionPending}
             onClick={async () => {
               if (!rejectionDialogCase) return;
               const rejectedCaseId = rejectionDialogCase.caseId;
@@ -2643,15 +2656,22 @@ const OperatorView = ({
                 customerName: rejectedCustomerName,
                 customerPhone: normalizeChileanPhone(rejectedCustomerPhone),
               };
-              closeRejectionDialog();
-              const next = await finishDocumentValidationRealtime(
-                data,
-                rejectedCaseId,
-                "rejected",
-                role,
-                rejectedContact,
-              );
-              setData(() => next);
+              await executeCallNextWindow({
+                pendingRef: windowTransitionPendingRef,
+                setLoading: setIsWindowTransitionPending,
+                request: () => finishDocumentValidationRealtime(
+                  data,
+                  rejectedCaseId,
+                  "rejected",
+                  role,
+                  rejectedContact,
+                ),
+                onResult: (next) => {
+                  setData(() => next);
+                  closeRejectionDialog();
+                },
+                onError: () => onFeedback("No pudimos rechazar el trámite. Intente nuevamente."),
+              });
             }}
           >
             Guardar y rechazar

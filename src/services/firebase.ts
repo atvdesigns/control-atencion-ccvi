@@ -29,6 +29,7 @@ import { getPublicJourneyPresentation } from "../publicJourney";
 import type {
   CaseRecord,
   CenterConfig,
+  PaymentQueueItem,
   PriorityType,
   PrivateUserRole,
   PublicDisplayCallEvent,
@@ -174,6 +175,32 @@ export interface ReassignWindowCaseResponse {
   outcome: ReassignWindowCaseOutcome;
   caseRecord?: CaseRecord;
   event?: TraceEvent;
+}
+
+export type FinishWindowDocumentOutcome =
+  | "approved"
+  | "incomplete"
+  | "rejected"
+  | "approved_projection_failed"
+  | "incomplete_projection_failed"
+  | "rejected_projection_failed"
+  | "case_not_found"
+  | "unauthenticated"
+  | "unauthorized"
+  | "invalid_request"
+  | "invalid_contact"
+  | "invalid_case_state"
+  | "conflict"
+  | "config_unavailable"
+  | "internal_error";
+
+export interface FinishWindowDocumentResponse {
+  ok: boolean;
+  outcome: FinishWindowDocumentOutcome;
+  caseRecord?: CaseRecord;
+  events?: TraceEvent[];
+  metadata?: SessionMetadata | null;
+  paymentItem?: PaymentQueueItem | null;
 }
 
 export interface PublicKioskConfig {
@@ -334,6 +361,33 @@ export const reassignWindowCaseCallable = async (
   }
   if (result.data.ok && (!result.data.caseRecord || !result.data.event)) {
     throw new Error("INVALID_REASSIGN_WINDOW_CASE_RESPONSE");
+  }
+  return result.data;
+};
+
+export const finishWindowDocumentValidationCallable = async (
+  centerId: string,
+  caseId: string,
+  outcome: Exclude<CaseRecord["documentStatus"], "pending">,
+  rejectedContact?: { customerName?: string; customerPhone?: string },
+): Promise<FinishWindowDocumentResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<
+    { centerId: string; caseId: string; outcome: string; rejectedContact?: { customerName?: string; customerPhone?: string } },
+    FinishWindowDocumentResponse
+  >(functions, "finishWindowDocumentValidation");
+  const result = await callable({ centerId, caseId, outcome, ...(outcome === "rejected" && rejectedContact ? { rejectedContact } : {}) });
+  const outcomes: FinishWindowDocumentOutcome[] = [
+    "approved", "incomplete", "rejected", "approved_projection_failed",
+    "incomplete_projection_failed", "rejected_projection_failed", "case_not_found",
+    "unauthenticated", "unauthorized", "invalid_request", "invalid_contact",
+    "invalid_case_state", "conflict", "config_unavailable", "internal_error",
+  ];
+  if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome)) {
+    throw new Error("INVALID_FINISH_WINDOW_DOCUMENT_RESPONSE");
+  }
+  if (result.data.ok && (!result.data.caseRecord || !Array.isArray(result.data.events))) {
+    throw new Error("INVALID_FINISH_WINDOW_DOCUMENT_RESPONSE");
   }
   return result.data;
 };

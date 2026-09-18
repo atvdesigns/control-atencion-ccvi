@@ -20,6 +20,7 @@ import {
 import {
   callNextWindowCaseCallable,
   createPriorityArrivalCallable,
+  finishWindowDocumentValidationCallable,
   markWindowCaseNoShowCallable,
   reassignWindowCaseCallable,
   startWindowValidationCallable,
@@ -1487,212 +1488,37 @@ export const finishDocumentValidationRealtime = async (
   if (!database) {
     return finishDocumentValidation(data, caseId, status, role, rejectedContact);
   }
-
   const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const center = getCurrentCenter(base);
-  const expectedCase = base.cases[caseId];
-  if (!expectedCase) return base;
-
-  const now = Date.now();
-  const eventIds =
-    status === "approved"
-      ? [`${now}-${transactionNonce()}`, `${now}-${transactionNonce()}`]
-      : [`${now}-${transactionNonce()}`];
-  const queueItemId = `${center.shortCode}-PAY-${transactionNonce()}`;
-  const rejectedCustomerName = rejectedContact?.customerName?.trim() || undefined;
-  const rejectedCustomerPhoneInput = rejectedContact?.customerPhone?.trim() ?? "";
-  const rejectedCustomerPhone = normalizeChileanPhone(rejectedCustomerPhoneInput);
-  if (status === "rejected" && rejectedCustomerPhoneInput && !rejectedCustomerPhone) {
-    throw new Error("INVALID_CHILEAN_PHONE");
-  }
-  const rejectedContactFields = {
-    ...(rejectedCustomerName ? { rejectedCustomerName } : {}),
-    ...(rejectedCustomerPhone ? { rejectedCustomerPhone } : {}),
-  };
-  const dayReference = ref(database, `days/${center.centerId}/${session.date}`);
-
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      if (!currentValue) return;
-
-      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
-      const current = remoteCases[caseId];
-      if (
-        !current ||
-        current.centerId !== center.centerId ||
-        current.sessionId !== session.sessionId ||
-        current.assignedWindowId !== expectedCase.assignedWindowId ||
-        current.assignedOperatorId !== role ||
-        current.currentState !== "in_document_validation"
-      ) {
-        return;
-      }
-
-      const remoteEvents = collectionRecord<TraceEvent>(currentValue.events);
-      if (status === "incomplete" || status === "rejected") {
-        const nextState =
-          status === "incomplete" ? "documentation_incomplete" : "rejected";
-        const nextCase: CaseRecord = {
-          ...current,
-          currentState: nextState,
-          documentStatus: status,
-          documentValidationCompletedAt: now,
-          ...(status === "rejected" ? rejectedContactFields : {}),
-          updatedAt: now,
-        };
-        const completionEvent: TraceEvent = {
-          eventId: eventIds[0],
-          centerId: current.centerId,
-          sessionId: current.sessionId,
-          caseId,
-          actorRole: role,
-          actorId: role,
-          action: status === "incomplete" ? "documentation_incomplete" : "case_rejected",
-          fromState: current.currentState,
-          toState: nextState,
-          timestamp: now,
-          optionalNote: null,
-        };
-
-        return {
-          ...currentValue,
-          cases: { ...remoteCases, [caseId]: nextCase },
-          events: { ...remoteEvents, [eventIds[0]]: completionEvent },
-        } satisfies RealtimeOperationalDay;
-      }
-
-      const remoteMetadata = currentValue.metadata ?? {};
-      const storedFolderNumber = remoteMetadata.nextFolderNumber;
-      const folderNumber =
-        Number.isSafeInteger(storedFolderNumber) && Number(storedFolderNumber) >= 1
-          ? Number(storedFolderNumber)
-          : session.nextFolderNumber;
-      const storedQueueNumber = remoteMetadata.nextPaymentQueueNumber;
-      const queueNumber =
-        Number.isSafeInteger(storedQueueNumber) && Number(storedQueueNumber) >= 1
-          ? Number(storedQueueNumber)
-          : session.nextPaymentQueueNumber;
-      const folderCode = `${center.shortCode}-F${pad(folderNumber)}`;
-      const remotePaymentQueue = collectionRecord<PaymentQueueItem>(currentValue.paymentQueue);
-      const folderAlreadyExists =
-        Object.values(remoteCases).some(
-          (caseItem) => caseItem.caseId !== caseId && caseItem.folderCode === folderCode,
-        ) || Object.values(remotePaymentQueue).some((item) => item.folderCode === folderCode);
-      if (folderAlreadyExists || remotePaymentQueue[queueItemId]) return;
-
-      const paymentItem: PaymentQueueItem = {
-        queueItemId,
-        centerId: current.centerId,
-        sessionId: current.sessionId,
-        caseId,
-        publicCode: current.publicCode,
-        folderCode,
-        queueNumber,
-        approvedAt: now,
-        state: "waiting_cashier",
-        cashierId: null,
-        reservedAt: null,
-        calledAt: null,
-        startedAt: null,
-        completedAt: null,
-        updatedAt: now,
-      };
-      const nextCase: CaseRecord = {
-        ...current,
-        currentState: "waiting_cashier",
-        documentStatus: "approved",
-        documentValidationCompletedAt: now,
-        folderCode,
-        paymentQueueNumber: queueNumber,
-        paymentTicketId: queueItemId,
-        updatedAt: now,
-      };
-      const folderEvent: TraceEvent = {
-        eventId: eventIds[0],
-        centerId: current.centerId,
-        sessionId: current.sessionId,
-        caseId,
-        actorRole: role,
-        actorId: role,
-        action: "folder_code_generated",
-        fromState: "in_document_validation",
-        toState: "waiting_cashier",
-        timestamp: now,
-        optionalNote: null,
-      };
-      const queueEvent: TraceEvent = {
-        eventId: eventIds[1],
-        centerId: current.centerId,
-        sessionId: current.sessionId,
-        caseId,
-        actorRole: role,
-        actorId: role,
-        action: "added_to_cashier_queue",
-        fromState: "approved_for_cashier",
-        toState: "waiting_cashier",
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentValue,
-        metadata: {
-          ...session,
-          ...remoteMetadata,
-          nextFolderNumber: folderNumber + 1,
-          nextPaymentQueueNumber: queueNumber + 1,
-        },
-        cases: { ...remoteCases, [caseId]: nextCase },
-        paymentQueue: { ...remotePaymentQueue, [queueItemId]: paymentItem },
-        events: {
-          ...remoteEvents,
-          [eventIds[0]]: folderEvent,
-          [eventIds[1]]: queueEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
+  const response = await finishWindowDocumentValidationCallable(
+    base.selectedCenterId,
+    caseId,
+    status,
+    rejectedContact,
   );
-
-  if (!result.committed) return base;
-
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedCase = committedDay?.cases?.[caseId];
-  if (!committedCase) return base;
-
-  const committedEvents = collectionRecord<TraceEvent>(committedDay?.events);
-  const nextEvents = eventIds
-    .map((eventId) => committedEvents[eventId])
-    .filter((eventItem): eventItem is TraceEvent => Boolean(eventItem));
-  if (nextEvents.length !== eventIds.length) return base;
-
-  await syncPublicCaseProjection(committedCase, center, session.date);
-
+  if (!response.ok || !response.caseRecord || !response.events) {
+    throw new Error(response.outcome);
+  }
   const nextData: AppData = {
     ...base,
-    cases: { ...base.cases, [caseId]: committedCase },
-    events: [...nextEvents, ...base.events],
+    cases: { ...base.cases, [caseId]: response.caseRecord },
+    events: [...response.events, ...base.events],
   };
-
   if (status !== "approved") return nextData;
-
-  const committedMetadata = committedDay?.metadata;
-  const committedPaymentItem = committedCase.paymentTicketId
-    ? committedDay?.paymentQueue?.[committedCase.paymentTicketId]
-    : undefined;
-  if (!committedMetadata || !committedPaymentItem) return base;
-
+  if (!response.metadata || !response.paymentItem) {
+    throw new Error("INVALID_FINISH_WINDOW_DOCUMENT_RESPONSE");
+  }
   return {
     ...nextData,
     sessions: {
       ...base.sessions,
-      [session.sessionId]: { ...session, ...committedMetadata },
+      [response.caseRecord.sessionId]: {
+        ...base.sessions[response.caseRecord.sessionId],
+        ...response.metadata,
+      },
     },
     paymentQueue: {
       ...base.paymentQueue,
-      [committedPaymentItem.queueItemId]: committedPaymentItem,
+      [response.paymentItem.queueItemId]: response.paymentItem,
     },
   };
 };

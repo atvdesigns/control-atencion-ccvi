@@ -25,6 +25,7 @@ interface CenterWindow {
 
 interface CenterConfig {
   centerId: string;
+  shortCode: string;
   timezone: string;
   serviceStartTime: string;
   serviceEndTime: string;
@@ -151,6 +152,32 @@ interface ReassignWindowCaseContext {
   uid: string;
   timestamp: number;
   eventId: string;
+}
+
+type FinishDocumentOutcome = "approved" | "incomplete" | "rejected";
+interface FinishDocumentValidationContext {
+  centerId: string;
+  sessionId: string;
+  caseId: string;
+  windowId: string;
+  serviceType: ServiceType;
+  role: WindowRole;
+  uid: string;
+  outcome: FinishDocumentOutcome;
+  shortCode: string;
+  timestamp: number;
+  eventIds: string[];
+  queueItemId: string;
+  rejectedCustomerName?: string;
+  rejectedCustomerPhone?: string;
+}
+
+interface CommittedDocumentValidation {
+  outcome: FinishDocumentOutcome;
+  caseRecord: WindowCase;
+  events: unknown[];
+  metadata: Record<string, unknown> | null;
+  paymentItem: Record<string, unknown> | null;
 }
 
 let priorityArrivalAfterCommitTestHook: (() => void) | null = null;
@@ -814,6 +841,166 @@ export const executeReassignWindowCase = async (
     committed,
     () => syncProjection(committed),
   );
+};
+
+const padOperationalNumber = (value: number) => String(value).padStart(3, "0");
+
+const normalizeChileanPhone = (phone: string): string | undefined => {
+  const compactPhone = phone.replace(/\s/g, "");
+  if (!compactPhone) return undefined;
+  const nationalNumber = compactPhone.startsWith("+56") ? compactPhone.slice(3) : compactPhone;
+  if (!/^[2-79]\d{8}$/.test(nationalNumber)) return undefined;
+  if (!compactPhone.startsWith("+56") && !/^\d{9}$/.test(compactPhone)) return undefined;
+  return `+56${nationalNumber}`;
+};
+
+export const applyFinishDocumentValidationMutation = (
+  currentDay: WindowDay | null,
+  context: FinishDocumentValidationContext,
+) => {
+  if (!currentDay) return { status: "case_not_found" as const, day: undefined, committed: null };
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const current = cases[context.caseId];
+  if (!current) return { status: "case_not_found" as const, day: undefined, committed: null };
+  if (current.centerId !== context.centerId || current.sessionId !== context.sessionId ||
+    current.assignedWindowId !== context.windowId || current.serviceType !== context.serviceType ||
+    current.assignedOperatorId !== context.role) {
+    return { status: "unauthorized" as const, day: undefined, committed: null };
+  }
+  if (current.currentState !== "in_document_validation") {
+    return { status: "invalid_case_state" as const, day: undefined, committed: null };
+  }
+  const events = recordOf(currentDay.events);
+  if (context.outcome !== "approved") {
+    const nextState = context.outcome === "incomplete" ? "documentation_incomplete" : "rejected";
+    const nextCase: WindowCase = {
+      ...current,
+      currentState: nextState,
+      documentStatus: context.outcome,
+      documentValidationCompletedAt: context.timestamp,
+      ...(context.outcome === "rejected" && context.rejectedCustomerName
+        ? { rejectedCustomerName: context.rejectedCustomerName } : {}),
+      ...(context.outcome === "rejected" && context.rejectedCustomerPhone
+        ? { rejectedCustomerPhone: context.rejectedCustomerPhone } : {}),
+      updatedAt: context.timestamp,
+    };
+    const event = {
+      eventId: context.eventIds[0], centerId: context.centerId, sessionId: context.sessionId,
+      caseId: context.caseId, actorRole: context.role, actorId: context.uid,
+      action: context.outcome === "incomplete" ? "documentation_incomplete" : "case_rejected",
+      fromState: current.currentState, toState: nextState, timestamp: context.timestamp, optionalNote: null,
+    };
+    return {
+      status: context.outcome,
+      committed: { outcome: context.outcome, caseRecord: nextCase, events: [event], metadata: null, paymentItem: null },
+      day: {
+        ...currentDay,
+        cases: { ...cases, [context.caseId]: nextCase },
+        events: { ...events, [context.eventIds[0]]: event },
+      } as WindowDay,
+    };
+  }
+
+  const metadata = recordOf<unknown>(currentDay.metadata);
+  const storedFolderNumber = metadata.nextFolderNumber;
+  const folderNumber = Number.isSafeInteger(storedFolderNumber) && Number(storedFolderNumber) >= 1
+    ? Number(storedFolderNumber) : 1;
+  const storedQueueNumber = metadata.nextPaymentQueueNumber;
+  const queueNumber = Number.isSafeInteger(storedQueueNumber) && Number(storedQueueNumber) >= 1
+    ? Number(storedQueueNumber) : 1;
+  const folderCode = `${context.shortCode}-F${padOperationalNumber(folderNumber)}`;
+  const paymentQueue = recordOf<Record<string, unknown>>(currentDay.paymentQueue);
+  const folderAlreadyExists = Object.values(cases).some((item) =>
+    item.caseId !== context.caseId && item.folderCode === folderCode) ||
+    Object.values(paymentQueue).some((item) => item.folderCode === folderCode);
+  if (folderAlreadyExists || paymentQueue[context.queueItemId]) {
+    return { status: "conflict" as const, day: undefined, committed: null };
+  }
+  const paymentItem = {
+    queueItemId: context.queueItemId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: context.caseId, publicCode: current.publicCode, folderCode, queueNumber,
+    approvedAt: context.timestamp, state: "waiting_cashier", cashierId: null, reservedAt: null,
+    calledAt: null, startedAt: null, completedAt: null, updatedAt: context.timestamp,
+  };
+  const nextCase: WindowCase = {
+    ...current, currentState: "waiting_cashier", documentStatus: "approved",
+    documentValidationCompletedAt: context.timestamp, folderCode,
+    paymentQueueNumber: queueNumber, paymentTicketId: context.queueItemId, updatedAt: context.timestamp,
+  };
+  const folderEvent = {
+    eventId: context.eventIds[0], centerId: context.centerId, sessionId: context.sessionId,
+    caseId: context.caseId, actorRole: context.role, actorId: context.uid,
+    action: "folder_code_generated", fromState: "in_document_validation",
+    toState: "waiting_cashier", timestamp: context.timestamp, optionalNote: null,
+  };
+  const queueEvent = {
+    eventId: context.eventIds[1], centerId: context.centerId, sessionId: context.sessionId,
+    caseId: context.caseId, actorRole: context.role, actorId: context.uid,
+    action: "added_to_cashier_queue", fromState: "approved_for_cashier",
+    toState: "waiting_cashier", timestamp: context.timestamp, optionalNote: null,
+  };
+  const nextMetadata = {
+    ...metadata, nextFolderNumber: folderNumber + 1, nextPaymentQueueNumber: queueNumber + 1,
+  };
+  return {
+    status: "approved" as const,
+    committed: {
+      outcome: "approved" as const, caseRecord: nextCase, events: [folderEvent, queueEvent],
+      metadata: nextMetadata, paymentItem,
+    },
+    day: {
+      ...currentDay, metadata: nextMetadata, cases: { ...cases, [context.caseId]: nextCase },
+      paymentQueue: { ...paymentQueue, [context.queueItemId]: paymentItem },
+      events: { ...events, [context.eventIds[0]]: folderEvent, [context.eventIds[1]]: queueEvent },
+    } as WindowDay,
+  };
+};
+
+export const runFinishDocumentValidationTransaction = async (
+  subscribeToAuthoritativeDay: (onValue: (exists: boolean) => void, onError: (error: unknown) => void) => () => void,
+  transact: (update: (currentDay: WindowDay | null) => WindowDay | undefined) =>
+    Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: FinishDocumentValidationContext,
+) => {
+  let detach = () => {};
+  try {
+    const exists = await new Promise<boolean>((resolve, reject) => {
+      detach = subscribeToAuthoritativeDay(resolve, reject);
+    });
+    if (!exists) return { status: "case_not_found" as const, committed: null };
+    const holder: { value: ReturnType<typeof applyFinishDocumentValidationMutation> | null } = { value: null };
+    const transaction = await transact((day) => {
+      holder.value = applyFinishDocumentValidationMutation(day, context);
+      return holder.value.day;
+    });
+    const result = holder.value;
+    if (transaction.committed && result?.committed) {
+      return { status: result.status, committed: result.committed };
+    }
+    return { status: result?.status ?? "conflict" as const, committed: null };
+  } finally {
+    detach();
+  }
+};
+
+export const executeFinishDocumentValidation = async (
+  subscribeToAuthoritativeDay: (onValue: (exists: boolean) => void, onError: (error: unknown) => void) => () => void,
+  transact: (update: (currentDay: WindowDay | null) => WindowDay | undefined) =>
+    Promise<{ committed: boolean; value: WindowDay | null }>,
+  context: FinishDocumentValidationContext,
+  syncProjection: (committed: CommittedDocumentValidation) => Promise<void>,
+  onCommitted: (committed: CommittedDocumentValidation) => void = () => {},
+) => {
+  const result = await runFinishDocumentValidationTransaction(subscribeToAuthoritativeDay, transact, context);
+  if (!result.committed) return { ok: false, outcome: result.status };
+  const committed = result.committed as CommittedDocumentValidation;
+  onCommitted(committed);
+  try {
+    await syncProjection(committed);
+    return { ok: true, ...committed, outcome: committed.outcome };
+  } catch {
+    return { ok: true, ...committed, outcome: `${committed.outcome}_projection_failed` };
+  }
 };
 
 const parseInput = (value: unknown): KioskArrivalInput => {
@@ -1486,6 +1673,131 @@ const createWindowTransitionCallable = (operation: WindowTransitionOperation) =>
 
 export const startWindowValidation = createWindowTransitionCallable("start");
 export const markWindowCaseNoShow = createWindowTransitionCallable("no_show");
+
+export const finishWindowDocumentValidation = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    const startedAt = Date.now();
+    let centerForLog: string | null = null;
+    let windowForLog: number | null = null;
+    const committedHolder: { value: CommittedDocumentValidation | null } = { value: null };
+    const finish = (outcome: string) => {
+      try {
+        console.info({ operation: "finishWindowDocumentValidation", outcome, center: centerForLog,
+          window: windowForLog, transactionCommitted: Boolean(committedHolder.value), durationMs: Date.now() - startedAt });
+      } catch { /* logging cannot alter the outcome */ }
+    };
+    try {
+      if (!request.auth?.uid) { finish("unauthenticated"); return { ok: false, outcome: "unauthenticated" as const }; }
+      const input = request.data as Record<string, unknown> | null;
+      const outcome = input?.outcome;
+      const expectedKeys = outcome === "rejected" && "rejectedContact" in (input ?? {}) ? 4 : 3;
+      if (!input || Array.isArray(input) || Object.keys(input).length !== expectedKeys ||
+        typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
+        typeof input.caseId !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(input.caseId) ||
+        !["approved", "incomplete", "rejected"].includes(outcome as string) ||
+        (outcome !== "rejected" && "rejectedContact" in input)) {
+        finish("invalid_request"); return { ok: false, outcome: "invalid_request" as const };
+      }
+      let rejectedCustomerName: string | undefined;
+      let rejectedCustomerPhone: string | undefined;
+      if (outcome === "rejected" && "rejectedContact" in input) {
+        const contact = input.rejectedContact;
+        if (!contact || typeof contact !== "object" || Array.isArray(contact)) {
+          finish("invalid_contact"); return { ok: false, outcome: "invalid_contact" as const };
+        }
+        const value = contact as Record<string, unknown>;
+        if (Object.keys(value).some((key) => !["customerName", "customerPhone"].includes(key)) ||
+          (value.customerName !== undefined && typeof value.customerName !== "string") ||
+          (value.customerPhone !== undefined && typeof value.customerPhone !== "string")) {
+          finish("invalid_contact"); return { ok: false, outcome: "invalid_contact" as const };
+        }
+        const name = (value.customerName as string | undefined)?.trim();
+        const phoneInput = (value.customerPhone as string | undefined)?.trim() ?? "";
+        if ((name?.length ?? 0) > 200 || phoneInput.length > 32) {
+          finish("invalid_contact"); return { ok: false, outcome: "invalid_contact" as const };
+        }
+        rejectedCustomerName = name || undefined;
+        rejectedCustomerPhone = normalizeChileanPhone(phoneInput);
+        if (phoneInput && !rejectedCustomerPhone) {
+          finish("invalid_contact"); return { ok: false, outcome: "invalid_contact" as const };
+        }
+      }
+      const centerId = input.centerId;
+      const caseId = input.caseId;
+      const uid = request.auth.uid;
+      centerForLog = centerId;
+      const database = getDatabase();
+      const [profileSnapshot, centerSnapshot] = await Promise.all([
+        database.ref(`users/${uid}`).get(), database.ref(`centers/${centerId}`).get(),
+      ]);
+      if (!profileSnapshot.exists()) { finish("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      if (!centerSnapshot.exists()) { finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const profile = profileSnapshot.val() as UserProfile;
+      const center = centerSnapshot.val() as CenterConfig;
+      const windowItem = authorizePriorityWindow(profile, uid, centerId, valuesOf(center.windows));
+      if (profile.role === "operator-window-1") windowForLog = 1;
+      if (profile.role === "operator-window-2") windowForLog = 2;
+      if (!windowItem) { finish("unauthorized"); return { ok: false, outcome: "unauthorized" as const }; }
+      if (center.centerId !== centerId || center.enabled !== true ||
+        typeof center.shortCode !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(center.shortCode)) {
+        finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const };
+      }
+      let dayId: string;
+      try { dayId = dateTimeInZone(new Date(), center.timezone).dayId; }
+      catch { finish("config_unavailable"); return { ok: false, outcome: "config_unavailable" as const }; }
+      const timestamp = Date.now();
+      const finishOutcome = outcome as FinishDocumentOutcome;
+      const reference = database.ref(`days/${centerId}/${dayId}`);
+      const response = await executeFinishDocumentValidation(
+        (onValue, onError) => {
+          const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+          return () => reference.off("value", listener);
+        },
+        async (update) => {
+          const tx = await reference.transaction(update, undefined, false);
+          return { committed: tx.committed, value: tx.snapshot.val() as WindowDay | null };
+        },
+        {
+          centerId, sessionId: `${centerId}-${dayId}`, caseId, windowId: windowItem.windowId,
+          serviceType: windowItem.serviceType, role: profile.role as WindowRole, uid,
+          outcome: finishOutcome, shortCode: center.shortCode, timestamp,
+          eventIds: finishOutcome === "approved" ? [randomUUID(), randomUUID()] : [randomUUID()],
+          queueItemId: `${center.shortCode}-PAY-${randomUUID()}`,
+          rejectedCustomerName, rejectedCustomerPhone,
+        },
+        async (knownCommitted) => {
+          const current = knownCommitted.caseRecord;
+          const destination = knownCommitted.outcome === "approved" ? null : `Ventanilla ${current.assignedWindowNumber}`;
+          const status = knownCommitted.outcome === "approved" ? "Espere el llamado a caja" :
+            knownCommitted.outcome === "incomplete" ? "El trámite no puede continuar por ahora" :
+              "El trámite no puede continuar";
+          await database.ref().update({
+            [`public/turns/${current.publicToken}`]: {
+              centerId, publicCode: current.publicCode, isPriority: current.isPriority, status,
+              serviceType: current.serviceType, serviceLabel: current.serviceLabel, destination,
+              updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
+              paymentMethods: publicPaymentMethods(center),
+            },
+            [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: null,
+            [`public/displays/${centerId}/${dayId}/${caseId}`]: null,
+          });
+        },
+        (knownCommitted) => { committedHolder.value = knownCommitted; },
+      );
+      finish(response.outcome);
+      return response;
+    } catch {
+      const knownCommitted = committedHolder.value;
+      if (knownCommitted) {
+        finish(`${knownCommitted.outcome}_projection_failed`);
+        return { ok: true, ...knownCommitted, outcome: `${knownCommitted.outcome}_projection_failed` };
+      }
+      finish("internal_error");
+      return { ok: false, outcome: "internal_error" as const };
+    }
+  },
+);
 
 export const reassignWindowCase = onCall(
   { region: "us-central1", enforceAppCheck: false },
