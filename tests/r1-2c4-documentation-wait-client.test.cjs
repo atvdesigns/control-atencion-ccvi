@@ -50,6 +50,15 @@ test("busy and pending guards prevent Resume dispatch", () => {
   assert.match(app, /pendingRef: windowTransitionPendingRef/);
 });
 
+test("Window guidance uses one contextual Alert with waiting guidance once", () => {
+  const messages = app.slice(app.indexOf("const documentationResumeBlocked"), app.indexOf("const operatorSectionSx"));
+  assert.match(messages, /Boolean\(activeCase\) && documentationWaitingCases\.length > 0/);
+  assert.equal(messages.split("Finalice o libere la atención actual antes de retomar un turno en espera.").length - 1, 1);
+  assert.match(app, /<Box component="ul"/);
+  const waitingAccordion = app.slice(app.indexOf('aria-label={`En espera por documentación'), app.indexOf('aria-label={`Procesados recientemente'));
+  assert.doesNotMatch(waitingAccordion, /<Alert/);
+});
+
 test("explicit profile windowId precedes safe legacy role derivation", () => {
   const body = store.slice(store.indexOf("export const windowForOperatorProfile"), store.indexOf("export const createArrival"));
   assert.match(body, /profile\.windowId/);

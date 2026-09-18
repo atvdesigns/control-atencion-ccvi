@@ -1793,18 +1793,22 @@ const OperatorView = ({
     )
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 6);
-  const operatorAlertLines = activeCase
+  const documentationResumeBlocked = Boolean(activeCase) && documentationWaitingCases.length > 0;
+  const windowContextMessages = activeCase
     ? [
+        `Debe finalizar ${activeCase.publicCode} antes de llamar otro cliente.`,
+        ...(activeCase.currentState === "called_to_window"
+          ? ["Espere a que la persona se presente para iniciar la validación."]
+          : []),
+        ...(documentationResumeBlocked
+          ? ["Finalice o libere la atención actual antes de retomar un turno en espera."]
+          : []),
         ...(activeCase.currentState === "in_document_validation"
           ? [
               activeCase.validationLevel === "enhanced"
                 ? "Verifique la documentación requerida para este proceso antes de aprobar."
                 : "Verifique la documentación antes de aprobar.",
             ]
-          : []),
-        `Debe finalizar ${activeCase.publicCode} antes de llamar otro cliente.`,
-        ...(activeCase.currentState === "called_to_window"
-          ? ["Espere a que la persona se presente para iniciar la validación."]
           : []),
         ...(activeCase.currentState === "in_document_validation" && otherWindows.length > 0
           ? ["Use Reasignar solo si la persona corresponde a otra ventanilla."]
@@ -1990,13 +1994,13 @@ const OperatorView = ({
                   "& .MuiAlert-message": { width: "100%" },
                 }}
               >
-                {operatorAlertLines.length === 1 ? (
+                {windowContextMessages.length === 1 ? (
                   <Typography variant="body2" fontWeight={600}>
-                    {operatorAlertLines[0]}
+                    {windowContextMessages[0]}
                   </Typography>
                 ) : (
                   <Box component="ul" sx={{ m: 0, pl: 2.25 }}>
-                    {operatorAlertLines.map((line, index) => (
+                    {windowContextMessages.map((line, index) => (
                       <Typography
                         component="li"
                         variant="body2"
@@ -2267,11 +2271,6 @@ const OperatorView = ({
           </AccordionSummary>
           <AccordionDetails sx={operatorAccordionDetailsSx}>
             <Stack spacing={1.5}>
-              {activeCase && documentationWaitingCases.length > 0 && (
-                <Alert severity="info">
-                  Finalice o libere la atención actual antes de retomar un turno en espera.
-                </Alert>
-              )}
               {documentationWaitingCases.length === 0 && (
                 <EmptyState text="No hay turnos esperando documentación en esta ventanilla." />
               )}
