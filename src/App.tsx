@@ -243,6 +243,13 @@ const formatTraceActor = (actorRole: string) => traceActorLabels[actorRole] ?? "
 const formatTime = (value: number | null | undefined) =>
   value ? new Intl.DateTimeFormat("es-CL", { hour: "2-digit", minute: "2-digit" }).format(value) : "--";
 
+const formatElapsedWait = (milliseconds: number) => {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
+
 const metricsRows = (metrics: Metrics) => [
   ["Llegadas", metrics.totalArrivals],
   ["Representación", metrics.representationArrivals],
@@ -914,6 +921,8 @@ const CaseCard = ({
   processed = false,
   showPriorityLabel = false,
   operatorStyle = false,
+  contentDrivenHeight = false,
+  secondaryMetadata,
 }: {
   caseItem: CaseRecord;
   center: CenterConfig;
@@ -923,6 +932,8 @@ const CaseCard = ({
   processed?: boolean;
   showPriorityLabel?: boolean;
   operatorStyle?: boolean;
+  contentDrivenHeight?: boolean;
+  secondaryMetadata?: React.ReactNode;
 }) => {
   const statusColor = statusColors[caseItem.currentState] ?? ccviPalette.warmGray;
   const cashierLabel = caseItem.cashierId?.replace("cashier", "Caja ");
@@ -938,7 +949,9 @@ const CaseCard = ({
         borderLeftStyle: "solid",
         borderRadius: operatorStyle ? "20px" : surfaceRadius,
         width: operatorStyle && !prominent ? "100%" : undefined,
-        height: operatorStyle && !prominent ? { xs: "auto", sm: 90 } : "100%",
+        height: operatorStyle && !prominent
+          ? contentDrivenHeight ? "auto" : { xs: "auto", sm: 90 }
+          : "100%",
         minHeight: operatorStyle && !prominent ? { xs: 90, sm: 90 } : undefined,
         bgcolor: prominent ? "rgba(255,255,255,0.98)" : "background.paper",
         boxShadow: prominent
@@ -953,7 +966,7 @@ const CaseCard = ({
         sx={
           compact || operatorStyle
             ? {
-                ...(operatorStyle && !prominent
+                ...(operatorStyle && !prominent && !contentDrivenHeight
                   ? {
                       pt: 2,
                       pr: 2,
@@ -965,13 +978,13 @@ const CaseCard = ({
                       p: { xs: 2, md: prominent ? 2.5 : 2 },
                       "&:last-child": { pb: { xs: 2, md: prominent ? 2.5 : 2 } },
                     }),
-                height: "100%",
+                height: contentDrivenHeight ? "auto" : "100%",
                 boxSizing: "border-box",
               }
             : undefined
         }
       >
-        <Stack spacing={compact ? 1.25 : prominent ? 2 : 1.5} sx={{ height: "100%" }}>
+        <Stack spacing={compact ? 1.25 : prominent ? 2 : 1.5} sx={{ height: contentDrivenHeight ? "auto" : "100%" }}>
           <Stack
             direction={{ xs: "column", sm: "row" }}
             alignItems={{ xs: "flex-start", sm: "flex-start" }}
@@ -1061,6 +1074,7 @@ const CaseCard = ({
                   size="small"
                 />
               </Stack>
+              {secondaryMetadata}
               {operatorStyle && caseItem.folderCode && (
                 <Chip
                   icon={<Description />}
@@ -2243,8 +2257,8 @@ const OperatorView = ({
             sx={{ ...accordionSummarySx, px: { xs: 2, md: 2.5 }, py: 1.25 }}
           >
             <Stack direction="row" alignItems="center" spacing={1.25}>
-              <Box sx={{ width: 36, height: 36, borderRadius: "50%", bgcolor: "rgba(237, 108, 2, 0.14)",
-                color: ccviPalette.warning, display: "grid", placeItems: "center", flexShrink: 0 }}>
+              <Box sx={{ width: 36, height: 36, borderRadius: "50%", bgcolor: ccviPalette.orange,
+                color: "white", display: "grid", placeItems: "center", flexShrink: 0 }}>
                 <AssignmentTurnedIn />
               </Box>
               <Typography variant="h5">En espera</Typography>
@@ -2264,33 +2278,42 @@ const OperatorView = ({
               <Grid2 container spacing={1.5}>
                 {documentationWaitingCases.map((caseItem) => (
                   <Grid2 size={{ xs: 12, md: 6 }} key={caseItem.caseId}>
-                    <CaseCard caseItem={caseItem} center={center} compact showPriorityLabel operatorStyle>
-                      <Stack spacing={1.25}>
-                        <Typography color="text.secondary">Documentación incompleta</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          En espera hace {formatDuration(Math.max(0, scheduleNow.getTime() -
-                            (caseItem.documentationWaitingSince ?? caseItem.updatedAt)))}
-                        </Typography>
-                        <Button
-                          variant="contained"
-                          disabled={Boolean(activeCase) || isWindowTransitionPending}
-                          onClick={async () => {
-                            if (activeCase) {
-                              onFeedback("Finalice la atención actual antes de retomar este turno.");
-                              return;
-                            }
-                            await executeCallNextWindow({
-                              pendingRef: windowTransitionPendingRef,
-                              setLoading: setIsWindowTransitionPending,
-                              request: () => resumeWindowDocumentationRealtime(data, caseItem.caseId, role),
-                              onResult: (next) => setData(() => next),
-                              onError: () => onFeedback("No pudimos retomar la atención. Intente nuevamente."),
-                            });
-                          }}
-                        >
-                          Retomar atención
-                        </Button>
-                      </Stack>
+                    <CaseCard
+                      caseItem={caseItem}
+                      center={center}
+                      compact
+                      showPriorityLabel
+                      operatorStyle
+                      contentDrivenHeight
+                      secondaryMetadata={(
+                        <Chip
+                          label={`Tiempo en espera: ${formatElapsedWait(scheduleNow.getTime() -
+                            (caseItem.documentationWaitingSince ?? caseItem.updatedAt))}`}
+                          variant="outlined"
+                          size="small"
+                        />
+                      )}
+                    >
+                      <Button
+                        variant="contained"
+                        disabled={Boolean(activeCase) || isWindowTransitionPending}
+                        sx={{ minHeight: 48 }}
+                        onClick={async () => {
+                          if (activeCase) {
+                            onFeedback("Finalice la atención actual antes de retomar este turno.");
+                            return;
+                          }
+                          await executeCallNextWindow({
+                            pendingRef: windowTransitionPendingRef,
+                            setLoading: setIsWindowTransitionPending,
+                            request: () => resumeWindowDocumentationRealtime(data, caseItem.caseId, role),
+                            onResult: (next) => setData(() => next),
+                            onError: () => onFeedback("No pudimos retomar la atención. Intente nuevamente."),
+                          });
+                        }}
+                      >
+                        Retomar atención
+                      </Button>
                     </CaseCard>
                   </Grid2>
                 ))}

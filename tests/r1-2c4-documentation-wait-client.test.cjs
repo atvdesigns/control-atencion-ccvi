@@ -36,7 +36,9 @@ test("Incomplete opens an explicit recoverable versus terminal decision", () => 
 
 test("waiting list shows elapsed time and manual Resume without timeout", () => {
   assert.match(app, /<Typography variant="h5">En espera<\/Typography>/);
-  assert.match(app, /En espera hace/);
+  assert.match(app, /Tiempo en espera:/);
+  assert.match(app, /formatElapsedWait/);
+  assert.match(app, /contentDrivenHeight/);
   assert.match(app, /Retomar atención/);
   assert.match(app, /resumeWindowDocumentationRealtime/);
   assert.doesNotMatch(app, /setTimeout\([\s\S]{0,200}resumeWindowDocumentationRealtime/);
