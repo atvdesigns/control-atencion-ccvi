@@ -13,7 +13,6 @@ import {
   DisplaySettings,
   DeleteOutline,
   Edit,
-  ErrorOutline,
   ExpandMore,
   FileDownload,
   Gavel,
@@ -704,9 +703,9 @@ const modalPaperSx = {
   overflowY: "auto",
   boxShadow: modalShadow,
 };
-const modalDecisionPaperSx = {
+const modalWindowPaperSx = {
   ...modalPaperSx,
-  width: "min(720px, calc(100% - 32px))",
+  width: "min(640px, calc(100% - 32px))",
 };
 const modalTitleSx = {
   px: { xs: 2.5, sm: 4 },
@@ -760,44 +759,37 @@ const WindowDialogHeader = ({
   id,
   title,
   supportingText,
-  tone,
-  icon,
 }: {
   id: string;
   title: string;
   supportingText: string;
-  tone: "warning" | "error";
-  icon: ReactNode;
 }) => (
   <Stack
-    spacing={1.5}
     alignItems="center"
     sx={{
       px: { xs: 2.5, sm: 4 },
-      pt: { xs: 2.5, sm: 4 },
+      pt: 0,
       pb: 2,
       textAlign: "center",
     }}
   >
     <Box
-      aria-hidden="true"
       sx={{
-        width: 48,
-        height: 48,
-        borderRadius: "50%",
-        display: "grid",
-        placeItems: "center",
-        bgcolor: `${tone}.light`,
-        color: `${tone}.dark`,
-        "& svg": { fontSize: 30 },
+        minHeight: 40,
+        px: 2.5,
+        borderRadius: "0 0 12px 12px",
+        bgcolor: "primary.main",
+        color: "common.white",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
       }}
     >
-      {icon}
+      <Typography id={id} variant="subtitle2" component="span" fontWeight={700} sx={{ textWrap: "balance" }}>
+        {title}
+      </Typography>
     </Box>
-    <Typography id={id} variant="h5" component="h2" fontWeight={700} sx={{ textWrap: "balance" }}>
-      {title}
-    </Typography>
-    <Typography color="text.secondary" sx={{ maxWidth: 520, textWrap: "pretty" }}>
+    <Typography color="text.primary" fontWeight={600} sx={{ mt: 2.5, maxWidth: 520, textWrap: "pretty" }}>
       {supportingText}
     </Typography>
   </Stack>
@@ -2857,25 +2849,23 @@ const OperatorView = ({
         aria-labelledby="incomplete-documentation-title"
         fullWidth
         maxWidth="md"
-        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalDecisionPaperSx } }}
+        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalWindowPaperSx } }}
       >
         <DialogTitle sx={{ p: 0 }}>
           <WindowDialogHeader
             id="incomplete-documentation-title"
             title="Documentación incompleta"
             supportingText="Seleccione cómo continuará la atención de este turno."
-            tone="warning"
-            icon={<WarningAmber />}
           />
         </DialogTitle>
         <DialogContent sx={modalContentSx}>
-          <Stack spacing={2}>
-            <Alert severity="info">
-              Poner en espera conserva el mismo turno para que la persona pueda regresar con la documentación faltante.
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Alert severity="warning">
+              <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+                <li>Poner en espera conserva el mismo turno para que la persona pueda regresar con la documentación faltante.</li>
+                <li>Finalizar atención cerrará el trámite actual por documentación incompleta.</li>
+              </Box>
             </Alert>
-            <Typography variant="body2" color="text.secondary">
-              Finalizar atención cerrará el trámite actual por documentación incompleta.
-            </Typography>
           </Stack>
         </DialogContent>
         <DialogActions
@@ -2906,7 +2896,6 @@ const OperatorView = ({
           </Button>
           <Button
             variant="contained"
-            color="warning"
             disabled={isWindowTransitionPending}
             sx={modalPrimaryActionSx}
             onClick={async () => {
@@ -2930,56 +2919,69 @@ const OperatorView = ({
         onClose={closeRejectionDialog}
         aria-labelledby="rejection-contact-title"
         fullWidth
-        maxWidth="sm"
-        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
+        maxWidth="md"
+        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalWindowPaperSx } }}
       >
         <DialogTitle sx={{ p: 0 }}>
           <WindowDialogHeader
             id="rejection-contact-title"
             title="Registrar contacto"
             supportingText="Estos datos permitirán contactar a la persona si es necesario."
-            tone="error"
-            icon={<ErrorOutline />}
           />
         </DialogTitle>
         <DialogContent sx={modalContentSx}>
-          <Stack spacing={2}>
-            <Alert severity="info">
-              Ambos campos son opcionales. Puede continuar aunque la persona no entregue estos datos.
-            </Alert>
-            <TextField
-              label="Nombre y apellido"
-              value={rejectedCustomerName}
-              onChange={(event) => setRejectedCustomerName(event.target.value)}
-              autoComplete="name"
-              fullWidth
-            />
-            <TextField
-              label="Teléfono de contacto"
-              type="tel"
-              value={rejectedCustomerPhone}
-              onChange={(event) => {
-                const startsWithPlus = event.target.value.trimStart().startsWith("+");
-                const maxDigits = startsWithPlus ? 11 : 9;
-                const digits = event.target.value.replace(/\D/g, "").slice(0, maxDigits);
-                setRejectedCustomerPhone(`${startsWithPlus ? "+" : ""}${digits}`);
-              }}
-              error={rejectedPhoneIsInvalid}
-              helperText={
-                rejectedPhoneIsInvalid
-                  ? "Ingrese 9 dígitos chilenos con inicio 2–7 o 9, o use +56 antes del número."
-                  : "Ejemplo: +56965732008"
-              }
-              autoComplete="tel"
-              slotProps={{
-                htmlInput: {
-                  inputMode: "tel",
-                  pattern: "\\+?[0-9]*",
-                  maxLength: 12,
-                },
-              }}
-              fullWidth
-            />
+          <Stack spacing={2} sx={{ pt: 0.5 }}>
+            <Box>
+              <Typography fontWeight={700}>Registre al contacto rechazado</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                Ambos campos son opcionales. Puede continuar aunque la persona no entregue estos datos.
+              </Typography>
+            </Box>
+            <Stack spacing={0.75}>
+              <Typography component="label" htmlFor="rejected-customer-name" variant="caption" fontWeight={600}>
+                Nombre y apellido
+              </Typography>
+              <TextField
+                id="rejected-customer-name"
+                placeholder="Nombre y apellido"
+                value={rejectedCustomerName}
+                onChange={(event) => setRejectedCustomerName(event.target.value)}
+                autoComplete="name"
+                fullWidth
+              />
+            </Stack>
+            <Stack spacing={0.75}>
+              <Typography component="label" htmlFor="rejected-customer-phone" variant="caption" fontWeight={600}>
+                Teléfono de contacto
+              </Typography>
+              <TextField
+                id="rejected-customer-phone"
+                placeholder="+56 9 1234 5678"
+                type="tel"
+                value={rejectedCustomerPhone}
+                onChange={(event) => {
+                  const startsWithPlus = event.target.value.trimStart().startsWith("+");
+                  const maxDigits = startsWithPlus ? 11 : 9;
+                  const digits = event.target.value.replace(/\D/g, "").slice(0, maxDigits);
+                  setRejectedCustomerPhone(`${startsWithPlus ? "+" : ""}${digits}`);
+                }}
+                error={rejectedPhoneIsInvalid}
+                helperText={
+                  rejectedPhoneIsInvalid
+                    ? "Ingrese 9 dígitos chilenos con inicio 2–7 o 9, o use +56 antes del número."
+                    : "Ejemplo: +56965732008"
+                }
+                autoComplete="tel"
+                slotProps={{
+                  htmlInput: {
+                    inputMode: "tel",
+                    pattern: "\\+?[0-9]*",
+                    maxLength: 12,
+                  },
+                }}
+                fullWidth
+              />
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ ...modalActionsSx, justifyContent: "center" }}>

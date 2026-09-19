@@ -15,6 +15,12 @@ const approvalHandler = app.slice(
 const handoffTitleIndex = app.indexOf('aria-labelledby="approval-handoff-title"');
 const handoffDialogStart = app.lastIndexOf("<Dialog", handoffTitleIndex);
 const handoffDialog = app.slice(handoffDialogStart, app.indexOf("\n      <Dialog\n", handoffTitleIndex + 1));
+const incompleteTitleIndex = app.indexOf('aria-labelledby="incomplete-documentation-title"');
+const incompleteDialogStart = app.lastIndexOf("<Dialog", incompleteTitleIndex);
+const incompleteDialog = app.slice(incompleteDialogStart, app.indexOf("\n      <Dialog\n", incompleteTitleIndex + 1));
+const rejectionTitleIndex = app.indexOf('aria-labelledby="rejection-contact-title"');
+const rejectionDialogStart = app.lastIndexOf("<Dialog", rejectionTitleIndex);
+const rejectionDialog = app.slice(rejectionDialogStart, app.indexOf("\n      </Page>", rejectionTitleIndex + 1));
 
 test("Approved consumes the authoritative committed case and opens the handoff dialog", () => {
   assert.match(functions, /outcome: "approved" as const, caseRecord: nextCase/);
@@ -66,19 +72,20 @@ test("dialog requires explicit completion and uses generic authoritative data", 
 test("operational dialogs share Figma-aligned geometry and action semantics", () => {
   assert.match(app, /const modalPaperSx = \{[\s\S]*borderRadius: "24px"[\s\S]*boxShadow: modalShadow/);
   assert.match(app, /const modalPrimaryActionSx = \{[\s\S]*minHeight: 56[\s\S]*borderRadius: "12px"[\s\S]*fontSize: 18/);
-  assert.match(app, /Documentación incompleta[\s\S]*modalTertiaryActionSx[\s\S]*Poner en espera[\s\S]*color="warning"/);
-  assert.match(app, /Registrar contacto[\s\S]*modalTertiaryActionSx[\s\S]*color="error"[\s\S]*Guardar y rechazar/);
+  assert.match(incompleteDialog, /Documentación incompleta[\s\S]*modalTertiaryActionSx[\s\S]*Poner en espera[\s\S]*Finalizar atención/);
+  assert.doesNotMatch(incompleteDialog, /color="warning"/);
+  assert.match(rejectionDialog, /Registrar contacto[\s\S]*modalTertiaryActionSx[\s\S]*color="error"[\s\S]*Guardar y rechazar/);
   assert.match(app, /Confirmar y obtener número/);
   assert.doesNotMatch(app, /<br\s*\/?\s*>/);
 });
 
 test("incomplete and rejection dialogs use the Window modal hierarchy without changing actions", () => {
-  assert.match(app, /const WindowDialogHeader = \(\{[\s\S]*tone: "warning" \| "error"/);
-  assert.match(app, /aria-labelledby="incomplete-documentation-title"[\s\S]*maxWidth="md"[\s\S]*modalDecisionPaperSx[\s\S]*tone="warning"[\s\S]*icon=\{<WarningAmber \/>\}/);
+  assert.match(app, /const WindowDialogHeader = \(\{[\s\S]*borderRadius: "0 0 12px 12px"[\s\S]*bgcolor: "primary\.main"/);
+  assert.match(app, /aria-labelledby="incomplete-documentation-title"[\s\S]*maxWidth="md"[\s\S]*modalWindowPaperSx[\s\S]*severity="warning"/);
   assert.match(app, /Documentación incompleta[\s\S]*Cancelar[\s\S]*Poner en espera[\s\S]*Finalizar atención/);
   assert.match(app, /flexWrap: \{ xs: "wrap", sm: "nowrap" \}/);
-  assert.match(app, /aria-labelledby="rejection-contact-title"[\s\S]*tone="error"[\s\S]*icon=\{<ErrorOutline \/>\}/);
-  assert.match(app, /Registrar contacto[\s\S]*Ambos campos son opcionales[\s\S]*Nombre y apellido[\s\S]*Teléfono de contacto[\s\S]*Guardar y rechazar/);
+  assert.match(app, /aria-labelledby="rejection-contact-title"[\s\S]*modalWindowPaperSx[\s\S]*Registre al contacto rechazado/);
+  assert.match(app, /Registrar contacto[\s\S]*Ambos campos son opcionales[\s\S]*htmlFor="rejected-customer-name"[\s\S]*htmlFor="rejected-customer-phone"[\s\S]*Guardar y rechazar/);
 });
 
 test("recently processed retains folderCode and no Window day write is introduced", () => {
