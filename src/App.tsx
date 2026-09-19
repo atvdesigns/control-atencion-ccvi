@@ -3029,13 +3029,19 @@ const CashierView = ({
   cashierId,
   data,
   setData,
+  onFeedback,
 }: {
   cashierId: string;
   data: AppData;
   setData: (updater: (data: AppData) => AppData) => void;
+  onFeedback: (message: string) => void;
 }) => {
   const center = getCurrentCenter(data);
   const [paymentIssue, setPaymentIssue] = useState<{ queueItemId: string; publicCode: string } | null>(null);
+  const callPendingRef = useRef(false);
+  const startPendingRef = useRef(false);
+  const [callPending, setCallPending] = useState(false);
+  const [startPending, setStartPending] = useState(false);
   const waitingCount = Object.values(data.paymentQueue).filter(
     (item) => item.centerId === data.selectedCenterId && item.state === "waiting_cashier",
   ).length;
@@ -3105,7 +3111,7 @@ const CashierView = ({
                   color="secondary"
                   variant="contained"
                   startIcon={<Payments />}
-                  disabled={!canCallNextCashier}
+                  disabled={!canCallNextCashier || callPending}
                   title={
                     active
                       ? "Finalice o pause el ticket activo antes de llamar otro turno."
@@ -3115,11 +3121,25 @@ const CashierView = ({
                   }
                   sx={{ mt: "auto" }}
                   onClick={async () => {
-                    const next = await callNextForCashierRealtime(data, cashierId);
-                    setData(() => next);
+                    if (callPendingRef.current) return;
+                    callPendingRef.current = true;
+                    setCallPending(true);
+                    try {
+                      const result = await callNextForCashierRealtime(data, cashierId);
+                      setData(() => result.data);
+                      if (result.outcome === "queue_empty") onFeedback("No hay turnos aprobados esperando caja.");
+                      else if (result.outcome === "cashier_busy") onFeedback("Finalice o pause la atención actual antes de llamar otro turno.");
+                      else if (result.outcome === "called_projection_failed") onFeedback("El turno fue asignado, pero no pudimos actualizar el display. No vuelva a llamarlo.");
+                      else if (result.outcome !== "called") onFeedback("No pudimos llamar el siguiente turno. Intente nuevamente.");
+                    } catch {
+                      onFeedback("No pudimos confirmar si el turno fue asignado. Revise la pantalla antes de intentar nuevamente.");
+                    } finally {
+                      callPendingRef.current = false;
+                      setCallPending(false);
+                    }
                   }}
                 >
-                  Llamar siguiente
+                  {callPending ? "Llamando…" : "Llamar siguiente"}
                 </Button>
               </Stack>
             </CardContent>
@@ -3197,15 +3217,25 @@ const CashierView = ({
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                       <Button
                         variant="contained"
+                        disabled={startPending}
                         onClick={async () => {
-                          const next = await startCashierAttentionRealtime(
-                            data,
-                            active.queueItemId,
-                          );
-                          setData(() => next);
+                          if (startPendingRef.current) return;
+                          startPendingRef.current = true;
+                          setStartPending(true);
+                          try {
+                            const result = await startCashierAttentionRealtime(data, active.queueItemId);
+                            setData(() => result.data);
+                            if (result.outcome === "started_projection_failed") onFeedback("La atención comenzó, pero no pudimos actualizar el display.");
+                            else if (result.outcome !== "started") onFeedback("No pudimos iniciar esta atención. Actualice la pantalla e intente nuevamente.");
+                          } catch {
+                            onFeedback("No pudimos confirmar el inicio de la atención. Revise la pantalla antes de intentar nuevamente.");
+                          } finally {
+                            startPendingRef.current = false;
+                            setStartPending(false);
+                          }
                         }}
                       >
-                        Iniciar atención
+                        {startPending ? "Iniciando…" : "Iniciar atención"}
                       </Button>
                       <Button
                         variant="outlined"
@@ -5443,7 +5473,7 @@ const App = () => {
           <Alert severity="warning">Esta ventanilla no está configurada para el centro seleccionado.</Alert>
         </Page>
       )}
-      {effectiveRole === "cashier" && authenticatedProfile?.cashierId && <CashierView cashierId={authenticatedProfile.cashierId} data={privateData} setData={setData} />}
+      {effectiveRole === "cashier" && authenticatedProfile?.cashierId && <CashierView cashierId={authenticatedProfile.cashierId} data={privateData} setData={setData} onFeedback={setSnackbar} />}
       {effectiveRole === "cashier" && !authenticatedProfile?.cashierId && <Page title="Caja no asignada"><Alert severity="warning">Su cuenta no tiene una caja asignada.</Alert></Page>}
       {effectiveRole === "display" && <DisplayView data={data} />}
       {effectiveRole === "admin" && <AdminView data={privateData} setData={setData} />}

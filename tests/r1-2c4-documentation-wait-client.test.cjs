@@ -67,9 +67,9 @@ test("explicit profile windowId precedes safe legacy role derivation", () => {
   assert.match(service, /value\.windowId !== undefined/);
 });
 
-test("remaining direct day writes are exactly the six Cashier mutations", () => {
-  assert.equal(store.split("const result = await runTransaction(").length - 1, 6);
-  for (const name of ["callNextForCashierRealtime", "startCashierAttentionRealtime", "completePaymentRealtime", "pausePaymentRealtime", "resumePausedPaymentRealtime", "markNoShowRealtime"]) {
+test("remaining direct day writes are exactly the four deferred Cashier mutations", () => {
+  assert.equal(store.split("const result = await runTransaction(").length - 1, 4);
+  for (const name of ["completePaymentRealtime", "pausePaymentRealtime", "resumePausedPaymentRealtime", "markNoShowRealtime"]) {
     const start = store.indexOf(`export const ${name}`); const end = store.indexOf("\nexport const ", start + 1);
     const body = store.slice(start, end === -1 ? undefined : end); assert.match(body, /runTransaction/); assert.match(body, /`days\//);
   }

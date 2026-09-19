@@ -94,6 +94,21 @@ export interface CallNextWindowCaseResponse {
   publicCode?: string;
 }
 
+export type CashierCommandOutcome =
+  | "called" | "called_projection_failed" | "started" | "started_projection_failed"
+  | "queue_empty" | "cashier_busy" | "case_not_found" | "invalid_case_state"
+  | "unauthenticated" | "unauthorized" | "invalid_request" | "config_unavailable"
+  | "conflict" | "internal_error";
+
+export interface CashierCommandResponse {
+  ok: boolean;
+  outcome: CashierCommandOutcome;
+  caseRecord?: CaseRecord;
+  queueItem?: PaymentQueueItem;
+  event?: TraceEvent;
+  metadata?: SessionMetadata;
+}
+
 export type CreatePriorityArrivalOutcome =
   | "created"
   | "closed"
@@ -283,6 +298,32 @@ export const callNextWindowCaseCallable = async (
   }
   return result.data;
 };
+
+const cashierCommandCallable = async (
+  name: "callNextCashierCase" | "startCashierAttention",
+  centerId: string,
+  queueItemId?: string,
+): Promise<CashierCommandResponse> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<Record<string, string>, CashierCommandResponse>(functions, name);
+  const result = await callable({ centerId, ...(queueItemId ? { queueItemId } : {}) });
+  const outcomes: CashierCommandOutcome[] = [
+    "called", "called_projection_failed", "started", "started_projection_failed", "queue_empty",
+    "cashier_busy", "case_not_found", "invalid_case_state", "unauthenticated", "unauthorized",
+    "invalid_request", "config_unavailable", "conflict", "internal_error",
+  ];
+  if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome) ||
+    (result.data.ok && (!result.data.caseRecord || !result.data.queueItem || !result.data.event))) {
+    throw new Error("INVALID_CASHIER_COMMAND_RESPONSE");
+  }
+  return result.data;
+};
+
+export const callNextCashierCaseCallable = (centerId: string) =>
+  cashierCommandCallable("callNextCashierCase", centerId);
+
+export const startCashierAttentionCallable = (centerId: string, queueItemId: string) =>
+  cashierCommandCallable("startCashierAttention", centerId, queueItemId);
 
 export const createPriorityArrivalCallable = async (
   centerId: string,

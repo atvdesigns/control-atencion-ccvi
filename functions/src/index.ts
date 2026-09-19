@@ -23,6 +23,14 @@ interface CenterWindow {
   displayOrder: number;
 }
 
+interface CenterCashier {
+  cashierId: string;
+  centerId?: string;
+  name: string;
+  enabled: boolean;
+  displayOrder: number;
+}
+
 interface CenterConfig {
   centerId: string;
   shortCode: string;
@@ -31,6 +39,7 @@ interface CenterConfig {
   serviceEndTime: string;
   enabled: boolean;
   windows: CenterWindow[] | Record<string, CenterWindow>;
+  cashiers?: CenterCashier[] | Record<string, CenterCashier>;
   documentaryRequirements?: Record<
     ServiceType,
     Array<{ label?: unknown; enabled?: unknown }> | Record<string, { label?: unknown; enabled?: unknown }>
@@ -54,6 +63,7 @@ interface UserProfile {
   centerAccess: Record<string, true>;
   enabled: boolean;
   windowId?: string;
+  cashierId?: string;
 }
 
 interface WindowCase {
@@ -194,6 +204,37 @@ interface DocumentationWaitContext {
   eventId: string;
 }
 
+interface CashierQueueItem {
+  queueItemId: string;
+  centerId: string;
+  sessionId: string;
+  caseId: string;
+  publicCode: string;
+  folderCode: string;
+  queueNumber: number;
+  approvedAt: number;
+  state: string;
+  cashierId: string | null;
+  [key: string]: unknown;
+}
+
+interface CashierMutationContext {
+  centerId: string;
+  sessionId: string;
+  cashierId: string;
+  uid: string;
+  timestamp: number;
+  eventId: string;
+  queueItemId?: string;
+}
+
+interface CommittedCashierMutation {
+  caseRecord: WindowCase;
+  queueItem: CashierQueueItem;
+  event: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
 let priorityArrivalAfterCommitTestHook: (() => void) | null = null;
 let priorityArrivalBeforeTransactionTestHook: (() => void) | null = null;
 export const setPriorityArrivalAfterCommitTestHook = (hook: (() => void) | null) => {
@@ -231,6 +272,110 @@ const recordOf = <T>(value: unknown): Record<string, T> =>
 
 const valuesOf = <T>(value: T[] | Record<string, T> | undefined): T[] =>
   Array.isArray(value) ? value : Object.values(value ?? {});
+
+export const authorizeCashierStation = (
+  profile: UserProfile | null,
+  uid: string,
+  centerId: string,
+  cashiers: CenterCashier[],
+) => {
+  if (!profile || profile.uid !== uid || profile.enabled !== true || profile.role !== "cashier") return null;
+  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true || !profile.cashierId) return null;
+  return cashiers.find((cashier) => cashier.cashierId === profile.cashierId && cashier.enabled === true &&
+    (!cashier.centerId || cashier.centerId === centerId)) ?? null;
+};
+
+const cashierFifo = (a: CashierQueueItem, b: CashierQueueItem) =>
+  a.approvedAt - b.approvedAt || a.queueNumber - b.queueNumber || a.queueItemId.localeCompare(b.queueItemId);
+
+export const selectNextCashierQueueItem = (
+  cases: Record<string, WindowCase>,
+  queue: Record<string, CashierQueueItem>,
+  centerId: string,
+  sessionId: string,
+  consecutivePriorityCases: number,
+) => {
+  const eligible = Object.values(queue).filter((item) => item.centerId === centerId && item.sessionId === sessionId &&
+    item.state === "waiting_cashier" && cases[item.caseId]?.currentState === "waiting_cashier").sort(cashierFifo);
+  const priority = eligible.filter((item) => cases[item.caseId]?.isPriority === true);
+  const regular = eligible.filter((item) => cases[item.caseId]?.isPriority !== true);
+  return priority.length > 0 && (regular.length === 0 || consecutivePriorityCases < 2)
+    ? priority[0] : regular[0] ?? priority[0];
+};
+
+export const applyCallNextCashierMutation = (currentDay: WindowDay | null, context: CashierMutationContext) => {
+  if (!currentDay) return { status: "queue_empty" as const, day: undefined, committed: null };
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const queue = recordOf<CashierQueueItem>(currentDay.paymentQueue);
+  if (Object.values(queue).some((item) => item.centerId === context.centerId && item.sessionId === context.sessionId &&
+    item.cashierId === context.cashierId && ["called_to_cashier", "in_cashier_attention"].includes(item.state))) {
+    return { status: "cashier_busy" as const, day: undefined, committed: null };
+  }
+  const metadata = recordOf<unknown>(currentDay.metadata);
+  const consecutive = Number.isSafeInteger(metadata.consecutivePriorityCasesForCashier)
+    ? Number(metadata.consecutivePriorityCasesForCashier) : 0;
+  const next = selectNextCashierQueueItem(cases, queue, context.centerId, context.sessionId, consecutive);
+  if (!next) return { status: "queue_empty" as const, day: undefined, committed: null };
+  const current = cases[next.caseId];
+  const nextCount = current.isPriority ? consecutive + 1 : 0;
+  const caseRecord: WindowCase = { ...current, currentState: "called_to_cashier", cashierId: context.cashierId,
+    calledToCashierAt: context.timestamp, updatedAt: context.timestamp };
+  const queueItem: CashierQueueItem = { ...next, state: "called_to_cashier", cashierId: context.cashierId,
+    reservedAt: context.timestamp, calledAt: context.timestamp, updatedAt: context.timestamp };
+  const event = { eventId: context.eventId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: current.caseId, actorRole: "cashier", actorId: context.uid, cashierId: context.cashierId,
+    action: "called_to_cashier", fromState: current.currentState, toState: "called_to_cashier",
+    timestamp: context.timestamp, optionalNote: null };
+  const nextMetadata = { ...metadata, consecutivePriorityCasesForCashier: nextCount };
+  const committed = { caseRecord, queueItem, event, metadata: nextMetadata };
+  return { status: "called" as const, committed, day: { ...currentDay, metadata: nextMetadata,
+    cases: { ...cases, [current.caseId]: caseRecord }, paymentQueue: { ...queue, [next.queueItemId]: queueItem },
+    events: { ...recordOf(currentDay.events), [context.eventId]: event } } as WindowDay };
+};
+
+export const applyStartCashierMutation = (currentDay: WindowDay | null, context: CashierMutationContext) => {
+  if (!currentDay || !context.queueItemId) return { status: "case_not_found" as const, day: undefined, committed: null };
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const queue = recordOf<CashierQueueItem>(currentDay.paymentQueue);
+  const item = queue[context.queueItemId];
+  const current = item ? cases[item.caseId] : undefined;
+  if (!item || !current) return { status: "case_not_found" as const, day: undefined, committed: null };
+  if (item.centerId !== context.centerId || item.sessionId !== context.sessionId || item.cashierId !== context.cashierId ||
+    current.centerId !== context.centerId || current.sessionId !== context.sessionId || current.cashierId !== context.cashierId) {
+    return { status: "unauthorized" as const, day: undefined, committed: null };
+  }
+  if (item.state !== "called_to_cashier" || current.currentState !== "called_to_cashier") {
+    return { status: "invalid_case_state" as const, day: undefined, committed: null };
+  }
+  const caseRecord: WindowCase = { ...current, currentState: "in_cashier_attention", cashierStartedAt: context.timestamp,
+    updatedAt: context.timestamp };
+  const queueItem: CashierQueueItem = { ...item, state: "in_cashier_attention", startedAt: context.timestamp,
+    updatedAt: context.timestamp };
+  const event = { eventId: context.eventId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: current.caseId, actorRole: "cashier", actorId: context.uid, cashierId: context.cashierId,
+    action: "cashier_attention_started", fromState: current.currentState, toState: "in_cashier_attention",
+    timestamp: context.timestamp, optionalNote: null };
+  const committed = { caseRecord, queueItem, event };
+  return { status: "started" as const, committed, day: { ...currentDay,
+    cases: { ...cases, [current.caseId]: caseRecord }, paymentQueue: { ...queue, [item.queueItemId]: queueItem },
+    events: { ...recordOf(currentDay.events), [context.eventId]: event } } as WindowDay };
+};
+
+export const runCashierTransaction = async (
+  subscribe: (onValue: (exists: boolean) => void, onError: (error: unknown) => void) => () => void,
+  transact: (update: (day: WindowDay | null) => WindowDay | undefined) => Promise<{ committed: boolean }>,
+  mutate: (day: WindowDay | null) => { status: string; day: WindowDay | undefined; committed: CommittedCashierMutation | null },
+) => {
+  let detach = () => {};
+  try {
+    const exists = await new Promise<boolean>((resolve, reject) => { detach = subscribe(resolve, reject); });
+    if (!exists) return { status: "queue_empty" as const, committed: null };
+    const holder: { value: ReturnType<typeof mutate> | null } = { value: null };
+    const transaction = await transact((day) => { holder.value = mutate(day); return holder.value.day; });
+    if (transaction.committed && holder.value?.committed) return holder.value;
+    return { status: holder.value?.status ?? "conflict", committed: null };
+  } finally { detach(); }
+};
 
 export const selectNextWindowCase = (
   cases: Record<string, WindowCase>,
@@ -2317,4 +2462,100 @@ export const callNextWindowCase = onCall(
       throw new HttpsError("internal", "No fue posible llamar el siguiente turno. Intente nuevamente.");
     }
   },
+);
+
+const cashierCommandInput = (value: unknown, requireQueueItem: boolean) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const expectedKeys = requireQueueItem ? ["centerId", "queueItemId"] : ["centerId"];
+  if (Object.keys(input).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(input, key)) ||
+    typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
+    (requireQueueItem && (typeof input.queueItemId !== "string" || !windowIdPattern.test(input.queueItemId)))) return null;
+  return { centerId: input.centerId, ...(requireQueueItem ? { queueItemId: input.queueItemId as string } : {}) };
+};
+
+const cashierProjection = async (
+  database: ReturnType<typeof getDatabase>, center: CenterConfig, cashier: CenterCashier, dayId: string,
+  committed: CommittedCashierMutation, includeCall: boolean,
+) => {
+  const caseRecord = committed.caseRecord;
+  const destination = cashier.name;
+  const status = includeCall ? `Diríjase a ${destination}` : "Atención en caja";
+  const updates: Record<string, unknown> = {
+    [`public/turns/${caseRecord.publicToken}`]: {
+      centerId: caseRecord.centerId, publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority,
+      status, serviceType: caseRecord.serviceType, serviceLabel: caseRecord.serviceLabel, destination,
+      updatedAt: caseRecord.updatedAt, requirements: publicRequirements(center, caseRecord.serviceType),
+      paymentMethods: publicPaymentMethods(center),
+    },
+    [`public/displays/${caseRecord.centerId}/${dayId}/${caseRecord.caseId}`]: {
+      publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority, status, destination,
+      updatedAt: caseRecord.updatedAt,
+    },
+  };
+  if (includeCall) updates[`public/displayCalls/${caseRecord.centerId}/${dayId}/${String(committed.event.eventId)}`] = {
+    publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority,
+    destinationType: "cashier", destinationLabel: destination, calledAt: caseRecord.updatedAt,
+  };
+  await database.ref().update(updates);
+};
+
+const executeCashierCallable = async (
+  request: { auth?: { uid: string }; data: unknown }, operation: "call" | "start",
+) => {
+  const input = cashierCommandInput(request.data, operation === "start");
+  if (!input) return { ok: false, outcome: "invalid_request" as const };
+  if (!request.auth?.uid) return { ok: false, outcome: "unauthenticated" as const };
+  const database = getDatabase();
+  const uid = request.auth.uid;
+  const [profileSnapshot, centerSnapshot] = await Promise.all([
+    database.ref(`users/${uid}`).get(), database.ref(`centers/${input.centerId}`).get(),
+  ]);
+  if (!profileSnapshot.exists()) return { ok: false, outcome: "unauthorized" as const };
+  if (!centerSnapshot.exists()) return { ok: false, outcome: "config_unavailable" as const };
+  const profile = profileSnapshot.val() as UserProfile;
+  const center = centerSnapshot.val() as CenterConfig;
+  if (center.centerId !== input.centerId || center.enabled !== true) return { ok: false, outcome: "config_unavailable" as const };
+  const cashier = authorizeCashierStation(profile, uid, input.centerId, valuesOf(center.cashiers));
+  if (!cashier) return { ok: false, outcome: "unauthorized" as const };
+  let dayId: string;
+  try { dayId = dateTimeInZone(new Date(), center.timezone).dayId; }
+  catch { return { ok: false, outcome: "config_unavailable" as const }; }
+  const context: CashierMutationContext = {
+    centerId: input.centerId, sessionId: `${input.centerId}-${dayId}`, cashierId: cashier.cashierId,
+    uid, timestamp: Date.now(), eventId: randomUUID(), ...(input.queueItemId ? { queueItemId: input.queueItemId } : {}),
+  };
+  const reference = database.ref(`days/${input.centerId}/${dayId}`);
+  try {
+    const result = await runCashierTransaction(
+      (onValue, onError) => { const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+        return () => reference.off("value", listener); },
+      async (update) => { const transaction = await reference.transaction(
+        (value) => update(value as WindowDay | null), undefined, false); return { committed: transaction.committed }; },
+      (day) => operation === "call" ? applyCallNextCashierMutation(day, context) : applyStartCashierMutation(day, context),
+    );
+    if (!result.committed) return { ok: false, outcome: result.status };
+    const committed = result.committed;
+    try {
+      await cashierProjection(database, center, cashier, dayId, committed, operation === "call");
+      return { ok: true, outcome: operation === "call" ? "called" as const : "started" as const, ...committed };
+    } catch {
+      return { ok: true, outcome: operation === "call" ? "called_projection_failed" as const : "started_projection_failed" as const,
+        ...committed };
+    }
+  } catch (error) {
+    console.error({ operation: operation === "call" ? "callNextCashierCase" : "startCashierAttention",
+      outcome: "internal_error", stage: "transaction", errorCategory: error instanceof Error ? error.name : "unknown" });
+    return { ok: false, outcome: "internal_error" as const };
+  }
+};
+
+export const callNextCashierCase = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => executeCashierCallable(request, "call"),
+);
+
+export const startCashierAttention = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => executeCashierCallable(request, "start"),
 );

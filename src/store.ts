@@ -19,15 +19,18 @@ import {
 } from "./centerJourneyConfig";
 import {
   callNextWindowCaseCallable,
+  callNextCashierCaseCallable,
   createPriorityArrivalCallable,
   finishWindowDocumentValidationCallable,
   markWindowCaseNoShowCallable,
   reassignWindowCaseCallable,
   startWindowValidationCallable,
+  startCashierAttentionCallable,
   pauseWindowForDocumentationCallable,
   resumeWindowDocumentationCallable,
   updateCasePriorityCallable,
   type CallNextWindowCaseOutcome,
+  type CashierCommandOutcome,
   type FinishWindowDocumentOutcome,
   database,
   publicDisplayCallEventUpdate,
@@ -1724,160 +1727,44 @@ export const callNextForCashier = (data: AppData, cashierId: string): AppData =>
   };
 };
 
+export interface CashierRealtimeResult {
+  data: AppData;
+  outcome: CashierCommandOutcome;
+}
+
+const mergeCashierCommandResponse = (
+  base: AppData,
+  response: Awaited<ReturnType<typeof callNextCashierCaseCallable>>,
+): CashierRealtimeResult => {
+  if (!response.ok || !response.caseRecord || !response.queueItem || !response.event) {
+    return { data: base, outcome: response.outcome };
+  }
+  const session = getCurrentSession(base);
+  return {
+    outcome: response.outcome,
+    data: {
+      ...base,
+      sessions: response.metadata ? {
+        ...base.sessions,
+        [session.sessionId]: { ...session, ...response.metadata },
+      } : base.sessions,
+      cases: { ...base.cases, [response.caseRecord.caseId]: response.caseRecord },
+      paymentQueue: { ...base.paymentQueue, [response.queueItem.queueItemId]: response.queueItem },
+      events: [response.event, ...base.events],
+    },
+  };
+};
+
 export const callNextForCashierRealtime = async (
   data: AppData,
   cashierId: string,
-): Promise<AppData> => {
-  if (!database) return callNextForCashier(data, cashierId);
-
-  const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const now = Date.now();
-  const eventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(
-    database,
-    `days/${base.selectedCenterId}/${session.date}`,
-  );
-
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      if (!currentValue) return;
-
-      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
-      const remoteQueue = collectionRecord<PaymentQueueItem>(currentValue.paymentQueue);
-      const remoteSession = {
-        ...session,
-        ...(currentValue.metadata ?? {}),
-      } as typeof session;
-      const transactionData: AppData = {
-        ...base,
-        sessions: {
-          ...base.sessions,
-          [session.sessionId]: remoteSession,
-        },
-        cases: remoteCases,
-        paymentQueue: remoteQueue,
-      };
-
-      const cashierHasActiveCase = Object.values(remoteQueue).some(
-        (item) =>
-          item.centerId === base.selectedCenterId &&
-          item.sessionId === session.sessionId &&
-          item.cashierId === cashierId &&
-          (item.state === "called_to_cashier" || item.state === "in_cashier_attention"),
-      );
-      if (cashierHasActiveCase) return;
-
-      const next = nextCashierQueueItem(transactionData);
-      if (!next) return;
-
-      const relatedCase = remoteCases[next.caseId];
-      if (
-        !relatedCase ||
-        next.state !== "waiting_cashier" ||
-        relatedCase.currentState !== "waiting_cashier"
-      ) {
-        return;
-      }
-
-      const nextPriorityCount = relatedCase.isPriority
-        ? remoteSession.consecutivePriorityCasesForCashier + 1
-        : 0;
-      const updatedQueue: PaymentQueueItem = {
-        ...next,
-        state: "called_to_cashier",
-        cashierId,
-        reservedAt: now,
-        calledAt: now,
-        updatedAt: now,
-      };
-      const updatedCase: CaseRecord = {
-        ...relatedCase,
-        currentState: "called_to_cashier",
-        cashierId,
-        calledToCashierAt: now,
-        updatedAt: now,
-      };
-      const callEvent: TraceEvent = {
-        eventId,
-        centerId: relatedCase.centerId,
-        sessionId: relatedCase.sessionId,
-        caseId: relatedCase.caseId,
-        actorRole: cashierId,
-        actorId: cashierId,
-        action: "called_to_cashier",
-        fromState: relatedCase.currentState,
-        toState: updatedCase.currentState,
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentValue,
-        metadata: {
-          ...remoteSession,
-          consecutivePriorityCasesForCashier: nextPriorityCount,
-        },
-        cases: {
-          ...remoteCases,
-          [relatedCase.caseId]: updatedCase,
-        },
-        paymentQueue: {
-          ...remoteQueue,
-          [next.queueItemId]: updatedQueue,
-        },
-        events: {
-          ...collectionRecord<TraceEvent>(currentValue.events),
-          [eventId]: callEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
-
-  if (!result.committed) return base;
-
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedMetadata = committedDay?.metadata;
-  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
-  if (
-    !committedDay?.cases ||
-    !committedDay.paymentQueue ||
-    !committedMetadata ||
-    !committedEvent
-  ) {
-    return base;
+): Promise<CashierRealtimeResult> => {
+  if (!database) {
+    const next = callNextForCashier(data, cashierId);
+    return { data: next, outcome: next === data ? "queue_empty" : "called" };
   }
-  const committedCase = committedDay.cases[committedEvent.caseId];
-  if (!committedCase) return base;
-
-  await syncPublicCaseProjection(
-    committedCase,
-    getCurrentCenter(base),
-    session.date,
-    { eventId, destinationType: "cashier", calledAt: now },
-  );
-
-  return {
-    ...base,
-    sessions: {
-      ...base.sessions,
-      [session.sessionId]: {
-        ...session,
-        ...committedMetadata,
-      },
-    },
-    cases: {
-      ...base.cases,
-      ...committedDay.cases,
-    },
-    paymentQueue: {
-      ...base.paymentQueue,
-      ...committedDay.paymentQueue,
-    },
-    events: [committedEvent, ...base.events],
-  };
+  const base = ensureSession(data);
+  return mergeCashierCommandResponse(base, await callNextCashierCaseCallable(base.selectedCenterId));
 };
 
 export const startCashierAttention = (data: AppData, queueItemId: string): AppData => {
@@ -1969,96 +1856,16 @@ export const completePayment = (data: AppData, queueItemId: string): AppData => 
 export const startCashierAttentionRealtime = async (
   data: AppData,
   queueItemId: string,
-): Promise<AppData> => {
-  if (!database) return startCashierAttention(data, queueItemId);
-
+): Promise<CashierRealtimeResult> => {
+  if (!database) {
+    const next = startCashierAttention(data, queueItemId);
+    return { data: next, outcome: next === data ? "invalid_case_state" : "started" };
+  }
   const base = ensureSession(data);
-  const session = getCurrentSession(base);
-  const now = Date.now();
-  const eventId = `${now}-${transactionNonce()}`;
-  const dayReference = ref(
-    database,
-    `days/${base.selectedCenterId}/${session.date}`,
+  return mergeCashierCommandResponse(
+    base,
+    await startCashierAttentionCallable(base.selectedCenterId, queueItemId),
   );
-
-  const result = await runTransaction(
-    dayReference,
-    (currentValue: RealtimeOperationalDay | null) => {
-      if (!currentValue) return;
-
-      const remoteCases = collectionRecord<CaseRecord>(currentValue.cases);
-      const remoteQueue = collectionRecord<PaymentQueueItem>(currentValue.paymentQueue);
-      const item = remoteQueue[queueItemId];
-      const relatedCase = item ? remoteCases[item.caseId] : undefined;
-      if (
-        !item ||
-        !relatedCase ||
-        item.state !== "called_to_cashier" ||
-        relatedCase.currentState !== "called_to_cashier" ||
-        !item.cashierId ||
-        relatedCase.cashierId !== item.cashierId
-      ) {
-        return;
-      }
-
-      const updatedCase: CaseRecord = {
-        ...relatedCase,
-        currentState: "in_cashier_attention",
-        cashierStartedAt: now,
-        updatedAt: now,
-      };
-      const updatedItem: PaymentQueueItem = {
-        ...item,
-        state: "in_cashier_attention",
-        startedAt: now,
-        updatedAt: now,
-      };
-      const startEvent: TraceEvent = {
-        eventId,
-        centerId: relatedCase.centerId,
-        sessionId: relatedCase.sessionId,
-        caseId: relatedCase.caseId,
-        actorRole: item.cashierId,
-        actorId: item.cashierId,
-        action: "cashier_attention_started",
-        fromState: relatedCase.currentState,
-        toState: updatedCase.currentState,
-        timestamp: now,
-        optionalNote: null,
-      };
-
-      return {
-        ...currentValue,
-        cases: { ...remoteCases, [relatedCase.caseId]: updatedCase },
-        paymentQueue: { ...remoteQueue, [queueItemId]: updatedItem },
-        events: {
-          ...collectionRecord<TraceEvent>(currentValue.events),
-          [eventId]: startEvent,
-        },
-      } satisfies RealtimeOperationalDay;
-    },
-    { applyLocally: false },
-  );
-
-  if (!result.committed) return base;
-  const committedDay = result.snapshot.val() as RealtimeOperationalDay | null;
-  const committedEvent = collectionRecord<TraceEvent>(committedDay?.events)[eventId];
-  if (!committedDay?.cases || !committedDay.paymentQueue || !committedEvent) return base;
-  const committedCase = committedDay.cases[committedEvent.caseId];
-  if (!committedCase) return base;
-
-  await syncPublicCaseProjection(
-    committedCase,
-    getCurrentCenter(base),
-    session.date,
-  );
-
-  return {
-    ...base,
-    cases: { ...base.cases, ...committedDay.cases },
-    paymentQueue: { ...base.paymentQueue, ...committedDay.paymentQueue },
-    events: [committedEvent, ...base.events],
-  };
 };
 
 export const completePaymentRealtime = async (
