@@ -54,9 +54,22 @@ test("dialog requires explicit completion and uses generic authoritative data", 
   assert.doesNotMatch(handoffDialog, /onClose=/);
   assert.doesNotMatch(handoffDialog, /SB-F|SB-|W1|W2|San Bernardo/);
   assert.match(handoffDialog, /whiteSpace: "nowrap"/);
-  assert.match(handoffDialog, /fontSize: "clamp\(/);
+  assert.match(handoffDialog, /fontSize: \{ xs: "3\.25rem", sm: "5rem" \}/);
   assert.match(handoffDialog, /aria-labelledby="approval-handoff-title"/);
   assert.match(handoffDialog, /aria-describedby="approval-handoff-description"/);
+  assert.match(handoffDialog, /modalPaperSx/);
+  assert.match(handoffDialog, /modalBackdropSx/);
+  assert.match(handoffDialog, /modalPrimaryActionSx/);
+  assert.match(handoffDialog, /color="secondary"/);
+});
+
+test("operational dialogs share Figma-aligned geometry and action semantics", () => {
+  assert.match(app, /const modalPaperSx = \{[\s\S]*borderRadius: "24px"[\s\S]*boxShadow: modalShadow/);
+  assert.match(app, /const modalPrimaryActionSx = \{[\s\S]*minHeight: 56[\s\S]*borderRadius: "12px"[\s\S]*fontSize: 18/);
+  assert.match(app, /Documentación incompleta[\s\S]*modalTertiaryActionSx[\s\S]*Poner en espera[\s\S]*color="warning"/);
+  assert.match(app, /Registrar contacto[\s\S]*modalTertiaryActionSx[\s\S]*color="error"[\s\S]*Guardar y rechazar/);
+  assert.match(app, /Confirmar y obtener número/);
+  assert.doesNotMatch(app, /<br\s*\/?\s*>/);
 });
 
 test("recently processed retains folderCode and no Window day write is introduced", () => {

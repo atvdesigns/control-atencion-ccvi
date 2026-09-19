@@ -692,6 +692,64 @@ const CountBadge = ({ count, label }: { count: number; label: string }) => (
 const surfaceRadius = "28px";
 const controlRadius = "16px";
 const surfaceShadow = "0 12px 28px rgba(17, 27, 50, 0.08)";
+const modalShadow = "0 16px 32px rgba(0,0,0,0.25), 0 4px 8px rgba(0,0,0,0.10)";
+
+const modalBackdropSx = { bgcolor: "rgba(17, 28, 51, 0.78)" };
+const modalPaperSx = {
+  width: "min(600px, calc(100% - 32px))",
+  maxHeight: "calc(100dvh - 32px)",
+  m: 2,
+  borderRadius: "24px",
+  overflowY: "auto",
+  boxShadow: modalShadow,
+};
+const modalTitleSx = {
+  px: { xs: 2.5, sm: 4 },
+  pt: { xs: 2.5, sm: 4 },
+  pb: 2,
+  fontWeight: 700,
+  lineHeight: 1.3,
+  textWrap: "balance",
+};
+const modalContentSx = {
+  px: { xs: 2.5, sm: 4 },
+  pb: 0,
+  "& p": { textWrap: "pretty" },
+};
+const modalActionsSx = {
+  px: { xs: 2.5, sm: 4 },
+  pt: 2,
+  pb: { xs: 2.5, sm: 4 },
+  gap: 2,
+  flexWrap: "wrap",
+  flexDirection: { xs: "column-reverse", sm: "row" },
+  "& > :not(style) ~ :not(style)": { ml: 0 },
+};
+const modalPrimaryActionSx = {
+  minHeight: 56,
+  minWidth: { xs: "100%", sm: 180 },
+  px: 4,
+  borderRadius: "12px",
+  fontSize: 18,
+  fontWeight: 600,
+  whiteSpace: "nowrap",
+};
+const modalSecondaryActionSx = {
+  ...modalPrimaryActionSx,
+  minWidth: { xs: "100%", sm: 150 },
+  borderWidth: 2,
+  bgcolor: "common.white",
+  "&:hover": { borderWidth: 2 },
+};
+const modalTertiaryActionSx = {
+  minHeight: 56,
+  minWidth: { xs: "100%", sm: "auto" },
+  px: 3,
+  borderRadius: "12px",
+  fontSize: 18,
+  fontWeight: 600,
+  whiteSpace: "nowrap",
+};
 
 const sectionContainerSx = {
   border: `1px solid ${ccviPalette.border}`,
@@ -1323,7 +1381,7 @@ const KioskView = ({ centerId }: { centerId: string }) => {
                 <Button
                   variant="outlined"
                   onClick={() => setRemainingSeconds(center.kioskTimeoutSeconds)}
-                  sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 220 }, borderWidth: 2 }}
+                  sx={{ ...modalSecondaryActionSx, minWidth: { xs: "100%", sm: 220 } }}
                 >
                   Necesito más tiempo
                 </Button>
@@ -1331,7 +1389,7 @@ const KioskView = ({ centerId }: { centerId: string }) => {
                   variant="contained"
                   color="secondary"
                   onClick={() => setLastCase(null)}
-                  sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 132 } }}
+                  sx={{ ...modalPrimaryActionSx, minWidth: { xs: "100%", sm: 132 } }}
                 >
                   Finalizar
                 </Button>
@@ -1527,25 +1585,12 @@ const KioskView = ({ centerId }: { centerId: string }) => {
           maxWidth="sm"
           aria-labelledby="kiosk-confirmation-title"
           aria-describedby="kiosk-confirmation-description"
-          BackdropProps={{
-            sx: {
-              background:
-                "linear-gradient(180deg, rgba(27,42,74,0.7) 0%, rgba(17,24,39,0.86) 100%)",
-            },
-          }}
-          PaperProps={{
-            sx: {
-              width: "calc(100% - 32px)",
-              maxWidth: 640,
-              maxHeight: "calc(100% - 32px)",
-              m: 2,
-              borderRadius: 3,
-              boxShadow: "0 16px 32px rgba(0,0,0,0.25), 0 4px 8px rgba(0,0,0,0.1)",
-              overflow: "hidden",
-            },
+          slotProps={{
+            backdrop: { sx: modalBackdropSx },
+            paper: { sx: { ...modalPaperSx, width: "min(640px, calc(100% - 32px))" } },
           }}
         >
-          <DialogTitle sx={{ px: { xs: 2.5, sm: 4 }, pt: { xs: 2.5, sm: 3 }, pb: 1.5 }}>
+          <DialogTitle sx={modalTitleSx}>
             <Stack direction="row" spacing={2} alignItems="center">
               <AppLogo size={56} />
               <Typography
@@ -1560,7 +1605,7 @@ const KioskView = ({ centerId }: { centerId: string }) => {
               </Typography>
             </Stack>
           </DialogTitle>
-          <DialogContent sx={{ px: { xs: 2.5, sm: 4 }, pb: 1 }}>
+          <DialogContent sx={modalContentSx}>
             {pendingService && (
               <Stack spacing={{ xs: 2.5, sm: 3 }}>
                 <Typography variant="h5" component="h2" fontWeight={700}>
@@ -1625,28 +1670,21 @@ const KioskView = ({ centerId }: { centerId: string }) => {
             )}
           </DialogContent>
           <DialogActions
-            sx={{
-              px: { xs: 2.5, sm: 4 },
-              pt: 2,
-              pb: { xs: 2.5, sm: 4 },
-              gap: 1.5,
-              justifyContent: "center",
-              flexDirection: { xs: "column-reverse", sm: "row" },
-              "& > :not(style) ~ :not(style)": { ml: 0 },
-            }}
+            sx={{ ...modalActionsSx, justifyContent: "center" }}
           >
             <Button
               variant="outlined"
               onClick={() => setPendingService(null)}
-              sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 132 }, borderWidth: 2 }}
+              sx={{ ...modalSecondaryActionSx, minWidth: { xs: "100%", sm: 132 } }}
             >
               Cancelar
             </Button>
             <Button
               variant="contained"
+              color="secondary"
               disabled={!centerIsOpen || !pendingWindow || !pendingService || isCreatingTicket}
               onClick={() => pendingService && createTicket(pendingService)}
-              sx={{ minHeight: 56, minWidth: { xs: "100%", sm: 250 }, px: 4 }}
+              sx={{ ...modalPrimaryActionSx, minWidth: { xs: "100%", sm: 250 } }}
             >
               {isCreatingTicket ? "Generando número..." : "Confirmar y obtener número"}
             </Button>
@@ -2377,23 +2415,9 @@ const OperatorView = ({
         fullWidth
         maxWidth="sm"
         slotProps={{
-          backdrop: {
-            sx: createdPriorityCase
-              ? { bgcolor: "rgba(17, 28, 51, 0.78)" }
-              : undefined,
-          },
+          backdrop: { sx: modalBackdropSx },
           paper: {
-            sx: createdPriorityCase
-              ? {
-                  position: "relative",
-                  width: "min(600px, calc(100% - 32px))",
-                  maxHeight: "calc(100dvh - 32px)",
-                  m: 2,
-                  borderRadius: "24px",
-                  overflowY: "auto",
-                  boxShadow: "0 16px 32px rgba(0,0,0,0.25), 0 4px 8px rgba(0,0,0,0.10)",
-                }
-              : undefined,
+            sx: { ...modalPaperSx, position: "relative" },
           },
         }}
       >
@@ -2401,7 +2425,7 @@ const OperatorView = ({
           sx={
             createdPriorityCase
               ? { p: 0, display: "flex", justifyContent: "center" }
-              : { px: { xs: 2.5, sm: 3 }, pt: { xs: 2.5, sm: 3 }, pb: 1.5 }
+              : modalTitleSx
           }
         >
           <Typography
@@ -2419,7 +2443,7 @@ const OperatorView = ({
                     textAlign: "center",
                     lineHeight: 1.4,
                   }
-                : undefined
+                : { textWrap: "balance" }
             }
           >
           {createdPriorityCase
@@ -2435,7 +2459,7 @@ const OperatorView = ({
           sx={
             createdPriorityCase
               ? { px: { xs: 2.5, sm: 3.5 }, pt: { xs: 1.5, sm: 1 }, pb: 0, overflow: "visible" }
-              : undefined
+              : modalContentSx
           }
         >
           {createdPriorityCase ? (
@@ -2536,28 +2560,25 @@ const OperatorView = ({
           )}
         </DialogContent>
         <DialogActions
-          sx={{
-            px: { xs: 2.5, sm: 3 },
-            pt: 2,
-            pb: { xs: 2.5, sm: 3 },
-            justifyContent: createdPriorityCase ? "center" : undefined,
-          }}
+          sx={{ ...modalActionsSx, justifyContent: createdPriorityCase ? "center" : "flex-end" }}
         >
           {createdPriorityCase ? (
             <Button
               variant="contained"
+              color="secondary"
               onClick={closePriorityDialog}
-              sx={{ minHeight: 56, minWidth: 140, px: 4, borderRadius: "12px" }}
+              sx={{ ...modalPrimaryActionSx, minWidth: { xs: "100%", sm: 140 } }}
             >
               Finalizar
             </Button>
           ) : (
             <>
-          <Button onClick={closePriorityDialog}>Cancelar</Button>
+          <Button onClick={closePriorityDialog} sx={modalTertiaryActionSx}>Cancelar</Button>
           {priorityDialogCase?.isPriority && (
             <Button
               color="error"
               variant="outlined"
+              sx={modalSecondaryActionSx}
               onClick={() => {
                 setPriorityRemovalCase(priorityDialogCase);
                 closePriorityDialog();
@@ -2568,6 +2589,8 @@ const OperatorView = ({
           )}
           <Button
             variant="contained"
+            color="secondary"
+            sx={modalPrimaryActionSx}
             disabled={
               isCreatingPriority ||
               (priorityCreationOpen && !priorityCreationAvailable) ||
@@ -2662,59 +2685,78 @@ const OperatorView = ({
         maxWidth="sm"
         aria-labelledby="approval-handoff-title"
         aria-describedby="approval-handoff-description"
+        slotProps={{
+          backdrop: { sx: modalBackdropSx },
+          paper: {
+            sx: {
+              ...modalPaperSx,
+              position: "relative",
+            },
+          },
+        }}
       >
-        <DialogTitle id="approval-handoff-title" sx={{ pb: 1 }}>
-          <Stack direction="row" spacing={1.5} alignItems="center">
-            <CheckCircle aria-hidden="true" sx={{ color: ccviPalette.success, fontSize: 32 }} />
-            <Typography component="span" variant="h5">Documentación aprobada</Typography>
-          </Stack>
+        <DialogTitle
+          id="approval-handoff-title"
+          sx={{ p: 0, display: "flex", justifyContent: "center" }}
+        >
+          <Typography
+            variant="caption"
+            component="span"
+            fontWeight={700}
+            sx={{
+              px: 2,
+              py: 1.25,
+              bgcolor: ccviPalette.navy,
+              color: "common.white",
+              borderRadius: "0 0 12px 12px",
+              textAlign: "center",
+              lineHeight: 1.4,
+            }}
+          >
+            Documentación aprobada
+          </Typography>
         </DialogTitle>
-        <DialogContent>
-          <Stack spacing={2.5} sx={{ pt: 1 }}>
-            <Typography id="approval-handoff-description">
+        <DialogContent sx={{ ...modalContentSx, pt: { xs: 2.5, sm: 2 } }}>
+          <Stack spacing={2} alignItems="center" textAlign="center" sx={{ mx: "auto", maxWidth: 544 }}>
+            <CheckCircle aria-hidden="true" sx={{ color: ccviPalette.success, fontSize: 48 }} />
+            <Typography id="approval-handoff-description" fontWeight={600} color="text.secondary">
               El trámite documental finalizó correctamente.
             </Typography>
-            <Box
-              sx={{
-                border: `1px solid ${ccviPalette.border}`,
-                borderRadius: 2,
-                bgcolor: "background.default",
-                px: { xs: 2, sm: 3 },
-                py: { xs: 2.5, sm: 3 },
-                textAlign: "center",
-                overflow: "hidden",
-              }}
-            >
-              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 700, mb: 0.5 }}>
+            <Box role="status" aria-live="polite" aria-atomic="true" sx={{ width: "100%" }}>
+              <Typography fontWeight={700} color="text.secondary">
                 Carpeta asignada
               </Typography>
               <Typography
-                variant="h2"
+                component="p"
                 aria-label={`Carpeta asignada ${approvalHandoffCase?.folderCode ?? ""}`}
                 sx={{
+                  mt: 0.5,
                   color: ccviPalette.navy,
-                  fontSize: "clamp(2rem, 10vw, 3.75rem)",
+                  fontSize: { xs: "3.25rem", sm: "5rem" },
                   fontWeight: 800,
                   letterSpacing: "0.03em",
-                  lineHeight: 1.1,
+                  lineHeight: 1.08,
+                  fontVariantNumeric: "tabular-nums",
                   whiteSpace: "nowrap",
                 }}
               >
                 {approvalHandoffCase?.folderCode}
               </Typography>
             </Box>
-            <Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5, maxWidth: 520, textWrap: "pretty" }}>
               Anote este número en la carpeta física. El usuario continuará su atención en caja.
             </Typography>
           </Stack>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 3, pt: 2 }}>
+        <DialogActions
+          sx={{ ...modalActionsSx, justifyContent: "center" }}
+        >
           <Button
             autoFocus
-            fullWidth
             variant="contained"
+            color="secondary"
             onClick={() => setApprovalHandoffCase(null)}
-            sx={{ minHeight: 52 }}
+            sx={{ ...modalPrimaryActionSx, minWidth: { xs: "100%", sm: 220 } }}
           >
             Finalizar atención
           </Button>
@@ -2725,16 +2767,18 @@ const OperatorView = ({
         onClose={() => setPriorityRemovalCase(null)}
         fullWidth
         maxWidth="sm"
+        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
       >
-        <DialogTitle>Quitar atención preferencial</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={modalTitleSx}>Quitar atención preferencial</DialogTitle>
+        <DialogContent sx={modalContentSx}>
           <Typography>Este turno volverá a tratarse como una atención regular.</Typography>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setPriorityRemovalCase(null)}>Cancelar</Button>
+        <DialogActions sx={modalActionsSx}>
+          <Button onClick={() => setPriorityRemovalCase(null)} sx={modalTertiaryActionSx}>Cancelar</Button>
           <Button
             color="error"
             variant="contained"
+            sx={modalPrimaryActionSx}
             onClick={async () => {
               if (!priorityRemovalCase) return;
               const priorityCaseId = priorityRemovalCase.caseId;
@@ -2760,9 +2804,10 @@ const OperatorView = ({
         onClose={() => !isWindowTransitionPending && setIncompleteDecisionCase(null)}
         fullWidth
         maxWidth="sm"
+        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
       >
-        <DialogTitle>Documentación incompleta</DialogTitle>
-        <DialogContent>
+        <DialogTitle sx={modalTitleSx}>Documentación incompleta</DialogTitle>
+        <DialogContent sx={modalContentSx}>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Typography>
               Seleccione cómo continuará la atención de este turno.
@@ -2775,11 +2820,12 @@ const OperatorView = ({
             </Typography>
           </Stack>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 3, gap: 1, flexWrap: "wrap" }}>
-          <Button disabled={isWindowTransitionPending} onClick={() => setIncompleteDecisionCase(null)}>Cancelar</Button>
+        <DialogActions sx={modalActionsSx}>
+          <Button disabled={isWindowTransitionPending} onClick={() => setIncompleteDecisionCase(null)} sx={modalTertiaryActionSx}>Cancelar</Button>
           <Button
             variant="outlined"
             disabled={isWindowTransitionPending}
+            sx={modalSecondaryActionSx}
             onClick={async () => {
               if (!incompleteDecisionCase) return;
               const caseId = incompleteDecisionCase.caseId;
@@ -2798,6 +2844,7 @@ const OperatorView = ({
             variant="contained"
             color="warning"
             disabled={isWindowTransitionPending}
+            sx={modalPrimaryActionSx}
             onClick={async () => {
               if (!incompleteDecisionCase) return;
               const caseId = incompleteDecisionCase.caseId;
@@ -2814,9 +2861,15 @@ const OperatorView = ({
           </Button>
         </DialogActions>
       </Dialog>
-      <Dialog open={Boolean(rejectionDialogCase)} onClose={closeRejectionDialog} fullWidth maxWidth="sm">
-        <DialogTitle>Registrar contacto</DialogTitle>
-        <DialogContent>
+      <Dialog
+        open={Boolean(rejectionDialogCase)}
+        onClose={closeRejectionDialog}
+        fullWidth
+        maxWidth="sm"
+        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
+      >
+        <DialogTitle sx={modalTitleSx}>Registrar contacto</DialogTitle>
+        <DialogContent sx={modalContentSx}>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <Typography>
               Estos datos permitirán contactar a la persona si es necesario.
@@ -2859,12 +2912,13 @@ const OperatorView = ({
             />
           </Stack>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 3 }}>
-          <Button onClick={closeRejectionDialog}>Cancelar</Button>
+        <DialogActions sx={modalActionsSx}>
+          <Button onClick={closeRejectionDialog} sx={modalTertiaryActionSx}>Cancelar</Button>
           <Button
             variant="contained"
             color="error"
             disabled={rejectedPhoneIsInvalid || isWindowTransitionPending}
+            sx={modalPrimaryActionSx}
             onClick={async () => {
               if (!rejectionDialogCase) return;
               const rejectedCaseId = rejectionDialogCase.caseId;
@@ -3218,9 +3272,15 @@ const PaymentIssueDialog = ({
   }, [open, publicCode]);
 
   return (
-    <Dialog open={open} onClose={onCancel} fullWidth maxWidth="sm">
-      <DialogTitle>Registrar pago no realizado</DialogTitle>
-      <DialogContent>
+    <Dialog
+      open={open}
+      onClose={onCancel}
+      fullWidth
+      maxWidth="sm"
+      slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
+    >
+      <DialogTitle sx={modalTitleSx}>Registrar pago no realizado</DialogTitle>
+      <DialogContent sx={modalContentSx}>
         <Stack spacing={2} sx={{ pt: 1 }}>
           <Alert severity="warning" icon={<WarningAmber />}>
             El pago del turno {publicCode} no será registrado como completado.
@@ -3242,14 +3302,15 @@ const PaymentIssueDialog = ({
           />
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 3 }}>
-        <Button variant="outlined" onClick={onCancel}>
+      <DialogActions sx={modalActionsSx}>
+        <Button variant="outlined" onClick={onCancel} sx={modalSecondaryActionSx}>
           Volver a caja
         </Button>
         <Button
           variant="contained"
           color="warning"
           startIcon={<WarningAmber />}
+          sx={modalPrimaryActionSx}
           onClick={() => onConfirm(note.trim() || null)}
         >
           Registrar pago no realizado
@@ -4195,9 +4256,9 @@ const CreateCenterDialog = ({
     timeIsValid;
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>Crear centro de atención</DialogTitle>
-      <DialogContent>
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}>
+      <DialogTitle sx={modalTitleSx}>Crear centro de atención</DialogTitle>
+      <DialogContent sx={modalContentSx}>
         <Stack spacing={2} sx={{ pt: 1 }}>
           <TextField
             label="Nombre del centro"
@@ -4289,12 +4350,14 @@ const CreateCenterDialog = ({
           </Stack>
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 3 }}>
-        <Button variant="outlined" onClick={onClose}>
+      <DialogActions sx={modalActionsSx}>
+        <Button variant="outlined" onClick={onClose} sx={modalSecondaryActionSx}>
           Cancelar
         </Button>
         <Button
           variant="contained"
+          color="secondary"
+          sx={modalPrimaryActionSx}
           disabled={!canCreateCenter}
           onClick={() =>
             onCreate(
@@ -4393,9 +4456,9 @@ const EditCenterDialog = ({
   }, [center]);
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>Editar centro de atención</DialogTitle>
-      <DialogContent>
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}>
+      <DialogTitle sx={modalTitleSx}>Editar centro de atención</DialogTitle>
+      <DialogContent sx={modalContentSx}>
         <Stack spacing={2} sx={{ pt: 1 }}>
           <TextField
             label="Nombre del centro"
@@ -4574,12 +4637,14 @@ const EditCenterDialog = ({
           </Box>
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 3 }}>
-        <Button variant="outlined" onClick={onClose}>
+      <DialogActions sx={modalActionsSx}>
+        <Button variant="outlined" onClick={onClose} sx={modalSecondaryActionSx}>
           Cancelar
         </Button>
         <Button
           variant="contained"
+          color="secondary"
+          sx={modalPrimaryActionSx}
           disabled={!canSaveCenter}
           onClick={() =>
             onSave({
@@ -4626,9 +4691,9 @@ const DeleteCenterDialog = ({
   }, [open, centerName]);
 
   return (
-    <Dialog open={open} onClose={onCancel} fullWidth maxWidth="sm">
-      <DialogTitle>Eliminar centro de atención</DialogTitle>
-      <DialogContent>
+    <Dialog open={open} onClose={onCancel} fullWidth maxWidth="sm" slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}>
+      <DialogTitle sx={modalTitleSx}>Eliminar centro de atención</DialogTitle>
+      <DialogContent sx={modalContentSx}>
         <Stack spacing={2} sx={{ pt: 1 }}>
           <Alert severity="error" icon={<DeleteOutline />}>
             Está a punto de eliminar el centro de atención "{centerName}". ¿Está seguro de su eliminación?
@@ -4650,14 +4715,15 @@ const DeleteCenterDialog = ({
           />
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 3 }}>
-        <Button variant="outlined" onClick={onCancel}>
+      <DialogActions sx={modalActionsSx}>
+        <Button variant="outlined" onClick={onCancel} sx={modalSecondaryActionSx}>
           No eliminar
         </Button>
         <Button
           variant="contained"
           color="error"
           startIcon={<DeleteOutline />}
+          sx={modalPrimaryActionSx}
           disabled={!canConfirm}
           onClick={onConfirm}
         >
