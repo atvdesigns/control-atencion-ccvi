@@ -3573,7 +3573,6 @@ const DisplayView = ({ data }: { data: AppData }) => {
   const newestEvents = [...events].sort((a, b) => b.calledAt - a.calledAt);
   const recentCalls = newestEvents.slice(0, 5);
   const activeCalls = activeEntries
-    .filter((entry) => /^Diríjase a\b/i.test(entry.status))
     .map((entry): PublicDisplayCallEvent => ({
       eventId: `active-${entry.publicCode}-${entry.destination}-${entry.updatedAt}`,
       publicCode: entry.publicCode,
