@@ -13,6 +13,7 @@ import {
   DisplaySettings,
   DeleteOutline,
   Edit,
+  ErrorOutline,
   ExpandMore,
   FileDownload,
   Gavel,
@@ -703,6 +704,10 @@ const modalPaperSx = {
   overflowY: "auto",
   boxShadow: modalShadow,
 };
+const modalDecisionPaperSx = {
+  ...modalPaperSx,
+  width: "min(720px, calc(100% - 32px))",
+};
 const modalTitleSx = {
   px: { xs: 2.5, sm: 4 },
   pt: { xs: 2.5, sm: 4 },
@@ -750,6 +755,53 @@ const modalTertiaryActionSx = {
   fontWeight: 600,
   whiteSpace: "nowrap",
 };
+
+const WindowDialogHeader = ({
+  id,
+  title,
+  supportingText,
+  tone,
+  icon,
+}: {
+  id: string;
+  title: string;
+  supportingText: string;
+  tone: "warning" | "error";
+  icon: ReactNode;
+}) => (
+  <Stack
+    spacing={1.5}
+    alignItems="center"
+    sx={{
+      px: { xs: 2.5, sm: 4 },
+      pt: { xs: 2.5, sm: 4 },
+      pb: 2,
+      textAlign: "center",
+    }}
+  >
+    <Box
+      aria-hidden="true"
+      sx={{
+        width: 48,
+        height: 48,
+        borderRadius: "50%",
+        display: "grid",
+        placeItems: "center",
+        bgcolor: `${tone}.light`,
+        color: `${tone}.dark`,
+        "& svg": { fontSize: 30 },
+      }}
+    >
+      {icon}
+    </Box>
+    <Typography id={id} variant="h5" component="h2" fontWeight={700} sx={{ textWrap: "balance" }}>
+      {title}
+    </Typography>
+    <Typography color="text.secondary" sx={{ maxWidth: 520, textWrap: "pretty" }}>
+      {supportingText}
+    </Typography>
+  </Stack>
+);
 
 const sectionContainerSx = {
   border: `1px solid ${ccviPalette.border}`,
@@ -2802,16 +2854,22 @@ const OperatorView = ({
       <Dialog
         open={Boolean(incompleteDecisionCase)}
         onClose={() => !isWindowTransitionPending && setIncompleteDecisionCase(null)}
+        aria-labelledby="incomplete-documentation-title"
         fullWidth
-        maxWidth="sm"
-        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
+        maxWidth="md"
+        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalDecisionPaperSx } }}
       >
-        <DialogTitle sx={modalTitleSx}>Documentación incompleta</DialogTitle>
+        <DialogTitle sx={{ p: 0 }}>
+          <WindowDialogHeader
+            id="incomplete-documentation-title"
+            title="Documentación incompleta"
+            supportingText="Seleccione cómo continuará la atención de este turno."
+            tone="warning"
+            icon={<WarningAmber />}
+          />
+        </DialogTitle>
         <DialogContent sx={modalContentSx}>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Typography>
-              Seleccione cómo continuará la atención de este turno.
-            </Typography>
+          <Stack spacing={2}>
             <Alert severity="info">
               Poner en espera conserva el mismo turno para que la persona pueda regresar con la documentación faltante.
             </Alert>
@@ -2820,7 +2878,13 @@ const OperatorView = ({
             </Typography>
           </Stack>
         </DialogContent>
-        <DialogActions sx={modalActionsSx}>
+        <DialogActions
+          sx={{
+            ...modalActionsSx,
+            justifyContent: "center",
+            flexWrap: { xs: "wrap", sm: "nowrap" },
+          }}
+        >
           <Button disabled={isWindowTransitionPending} onClick={() => setIncompleteDecisionCase(null)} sx={modalTertiaryActionSx}>Cancelar</Button>
           <Button
             variant="outlined"
@@ -2864,19 +2928,25 @@ const OperatorView = ({
       <Dialog
         open={Boolean(rejectionDialogCase)}
         onClose={closeRejectionDialog}
+        aria-labelledby="rejection-contact-title"
         fullWidth
         maxWidth="sm"
         slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
       >
-        <DialogTitle sx={modalTitleSx}>Registrar contacto</DialogTitle>
+        <DialogTitle sx={{ p: 0 }}>
+          <WindowDialogHeader
+            id="rejection-contact-title"
+            title="Registrar contacto"
+            supportingText="Estos datos permitirán contactar a la persona si es necesario."
+            tone="error"
+            icon={<ErrorOutline />}
+          />
+        </DialogTitle>
         <DialogContent sx={modalContentSx}>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Typography>
-              Estos datos permitirán contactar a la persona si es necesario.
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
+          <Stack spacing={2}>
+            <Alert severity="info">
               Ambos campos son opcionales. Puede continuar aunque la persona no entregue estos datos.
-            </Typography>
+            </Alert>
             <TextField
               label="Nombre y apellido"
               value={rejectedCustomerName}
@@ -2912,7 +2982,7 @@ const OperatorView = ({
             />
           </Stack>
         </DialogContent>
-        <DialogActions sx={modalActionsSx}>
+        <DialogActions sx={{ ...modalActionsSx, justifyContent: "center" }}>
           <Button onClick={closeRejectionDialog} sx={modalTertiaryActionSx}>Cancelar</Button>
           <Button
             variant="contained"

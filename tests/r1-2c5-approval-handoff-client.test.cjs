@@ -72,6 +72,15 @@ test("operational dialogs share Figma-aligned geometry and action semantics", ()
   assert.doesNotMatch(app, /<br\s*\/?\s*>/);
 });
 
+test("incomplete and rejection dialogs use the Window modal hierarchy without changing actions", () => {
+  assert.match(app, /const WindowDialogHeader = \(\{[\s\S]*tone: "warning" \| "error"/);
+  assert.match(app, /aria-labelledby="incomplete-documentation-title"[\s\S]*maxWidth="md"[\s\S]*modalDecisionPaperSx[\s\S]*tone="warning"[\s\S]*icon=\{<WarningAmber \/>\}/);
+  assert.match(app, /Documentación incompleta[\s\S]*Cancelar[\s\S]*Poner en espera[\s\S]*Finalizar atención/);
+  assert.match(app, /flexWrap: \{ xs: "wrap", sm: "nowrap" \}/);
+  assert.match(app, /aria-labelledby="rejection-contact-title"[\s\S]*tone="error"[\s\S]*icon=\{<ErrorOutline \/>\}/);
+  assert.match(app, /Registrar contacto[\s\S]*Ambos campos son opcionales[\s\S]*Nombre y apellido[\s\S]*Teléfono de contacto[\s\S]*Guardar y rechazar/);
+});
+
 test("recently processed retains folderCode and no Window day write is introduced", () => {
   assert.match(app, /<Typography variant="h5">Procesados recientemente<\/Typography>/);
   assert.match(app, /label=\{`Carpeta \$\{caseItem\.folderCode\}`\}/);
