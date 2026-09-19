@@ -27,9 +27,9 @@ test("callable payloads contain no cashier authority supplied by the browser", (
   assert.doesNotMatch(body(service, "callNextCashierCaseCallable"), /cashierId|uid|role/);
 });
 
-test("only the four deferred Cashier mutations retain direct private transactions", () => {
-  assert.equal(store.split("const result = await runTransaction(").length - 1, 4);
-  for (const name of ["completePaymentRealtime", "pausePaymentRealtime", "resumePausedPaymentRealtime", "markNoShowRealtime"]) {
+test("only deferred Complete Payment retains a direct private transaction", () => {
+  assert.equal(store.split("const result = await runTransaction(").length - 1, 1);
+  for (const name of ["completePaymentRealtime"]) {
     assert.match(body(store, name), /runTransaction/);
     assert.match(body(store, name), /`days\//);
   }

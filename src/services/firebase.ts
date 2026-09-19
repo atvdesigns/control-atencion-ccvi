@@ -96,6 +96,8 @@ export interface CallNextWindowCaseResponse {
 
 export type CashierCommandOutcome =
   | "called" | "called_projection_failed" | "started" | "started_projection_failed"
+  | "paused" | "paused_projection_failed" | "resumed" | "resumed_projection_failed"
+  | "no_show" | "no_show_projection_failed"
   | "queue_empty" | "cashier_busy" | "case_not_found" | "invalid_case_state"
   | "unauthenticated" | "unauthorized" | "invalid_request" | "config_unavailable"
   | "conflict" | "internal_error";
@@ -300,15 +302,19 @@ export const callNextWindowCaseCallable = async (
 };
 
 const cashierCommandCallable = async (
-  name: "callNextCashierCase" | "startCashierAttention",
+  name: "callNextCashierCase" | "startCashierAttention" | "pauseCashierPayment" |
+    "resumeCashierPayment" | "markCashierCaseNoShow",
   centerId: string,
   queueItemId?: string,
+  note?: string | null,
 ): Promise<CashierCommandResponse> => {
   if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
-  const callable = httpsCallable<Record<string, string>, CashierCommandResponse>(functions, name);
-  const result = await callable({ centerId, ...(queueItemId ? { queueItemId } : {}) });
+  const callable = httpsCallable<Record<string, string | null>, CashierCommandResponse>(functions, name);
+  const result = await callable({ centerId, ...(queueItemId ? { queueItemId } : {}),
+    ...(name === "pauseCashierPayment" ? { note: note ?? null } : {}) });
   const outcomes: CashierCommandOutcome[] = [
     "called", "called_projection_failed", "started", "started_projection_failed", "queue_empty",
+    "paused", "paused_projection_failed", "resumed", "resumed_projection_failed", "no_show", "no_show_projection_failed",
     "cashier_busy", "case_not_found", "invalid_case_state", "unauthenticated", "unauthorized",
     "invalid_request", "config_unavailable", "conflict", "internal_error",
   ];
@@ -324,6 +330,15 @@ export const callNextCashierCaseCallable = (centerId: string) =>
 
 export const startCashierAttentionCallable = (centerId: string, queueItemId: string) =>
   cashierCommandCallable("startCashierAttention", centerId, queueItemId);
+
+export const pauseCashierPaymentCallable = (centerId: string, queueItemId: string, note: string | null) =>
+  cashierCommandCallable("pauseCashierPayment", centerId, queueItemId, note);
+
+export const resumeCashierPaymentCallable = (centerId: string, queueItemId: string) =>
+  cashierCommandCallable("resumeCashierPayment", centerId, queueItemId);
+
+export const markCashierCaseNoShowCallable = (centerId: string, queueItemId: string) =>
+  cashierCommandCallable("markCashierCaseNoShow", centerId, queueItemId);
 
 export const createPriorityArrivalCallable = async (
   centerId: string,

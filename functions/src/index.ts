@@ -226,6 +226,7 @@ interface CashierMutationContext {
   timestamp: number;
   eventId: string;
   queueItemId?: string;
+  note?: string | null;
 }
 
 interface CommittedCashierMutation {
@@ -372,6 +373,105 @@ export const runCashierTransaction = async (
     if (!exists) return { status: "queue_empty" as const, committed: null };
     const holder: { value: ReturnType<typeof mutate> | null } = { value: null };
     const transaction = await transact((day) => { holder.value = mutate(day); return holder.value.day; });
+    if (transaction.committed && holder.value?.committed) return holder.value;
+    return { status: holder.value?.status ?? "conflict", committed: null };
+  } finally { detach(); }
+};
+
+type CashierFollowupOperation = "pause" | "resume" | "no_show";
+
+export const applyCashierFollowupMutation = (
+  currentDay: WindowDay | null,
+  context: CashierMutationContext,
+  operation: CashierFollowupOperation,
+) => {
+  if (!currentDay || !context.queueItemId) {
+    return { status: "case_not_found" as const, day: undefined, committed: null };
+  }
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const queue = recordOf<CashierQueueItem>(currentDay.paymentQueue);
+  if (operation === "resume" && Object.values(queue).some((item) =>
+    item.centerId === context.centerId && item.sessionId === context.sessionId &&
+    item.cashierId === context.cashierId && ["called_to_cashier", "in_cashier_attention"].includes(item.state))) {
+    return { status: "cashier_busy" as const, day: undefined, committed: null };
+  }
+  const item = queue[context.queueItemId];
+  const current = item ? cases[item.caseId] : undefined;
+  if (!item || !current) return { status: "case_not_found" as const, day: undefined, committed: null };
+  if (item.centerId !== context.centerId || item.sessionId !== context.sessionId ||
+    current.centerId !== context.centerId || current.sessionId !== context.sessionId) {
+    return { status: "unauthorized" as const, day: undefined, committed: null };
+  }
+  const expectedState = operation === "pause" ? "in_cashier_attention" :
+    operation === "resume" ? "paused" : "called_to_cashier";
+  if (item.state !== expectedState || current.currentState !== expectedState) {
+    return { status: "invalid_case_state" as const, day: undefined, committed: null };
+  }
+  if (operation !== "resume" &&
+    (item.cashierId !== context.cashierId || current.cashierId !== context.cashierId)) {
+    return { status: "unauthorized" as const, day: undefined, committed: null };
+  }
+
+  const targetState = operation === "pause" ? "paused" :
+    operation === "resume" ? "in_cashier_attention" : "no_show";
+  const action = operation === "pause" ? "payment_not_completed" :
+    operation === "resume" ? "payment_resumed" : "no_show";
+  const caseRecord: WindowCase = {
+    ...current,
+    currentState: targetState,
+    ...(operation === "pause" ? { optionalInternalNote: context.note ?? null } : {}),
+    ...(operation === "resume" ? {
+      cashierId: context.cashierId,
+      calledToCashierAt: context.timestamp,
+      cashierStartedAt: context.timestamp,
+    } : {}),
+    updatedAt: context.timestamp,
+  };
+  const queueItem: CashierQueueItem = {
+    ...item,
+    state: targetState,
+    ...(operation === "pause" ? { cashierId: null } : {}),
+    ...(operation === "resume" ? {
+      cashierId: context.cashierId,
+      calledAt: context.timestamp,
+      startedAt: context.timestamp,
+    } : {}),
+    updatedAt: context.timestamp,
+  };
+  const event = {
+    eventId: context.eventId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: current.caseId, actorRole: "cashier", actorId: context.uid, cashierId: context.cashierId,
+    action, fromState: current.currentState, toState: targetState, timestamp: context.timestamp,
+    optionalNote: operation === "pause" ? context.note ?? null : null,
+  };
+  const committed = { caseRecord, queueItem, event };
+  return {
+    status: operation === "pause" ? "paused" as const : operation === "resume" ? "resumed" as const : "no_show" as const,
+    committed,
+    day: {
+      ...currentDay,
+      cases: { ...cases, [current.caseId]: caseRecord },
+      paymentQueue: { ...queue, [item.queueItemId]: queueItem },
+      events: { ...recordOf(currentDay.events), [context.eventId]: event },
+    } as WindowDay,
+  };
+};
+
+export const runCashierFollowupTransaction = async (
+  subscribe: (onValue: (exists: boolean) => void, onError: (error: unknown) => void) => () => void,
+  transact: (update: (day: WindowDay | null) => WindowDay | undefined) => Promise<{ committed: boolean }>,
+  context: CashierMutationContext,
+  operation: CashierFollowupOperation,
+) => {
+  let detach = () => {};
+  try {
+    const exists = await new Promise<boolean>((resolve, reject) => { detach = subscribe(resolve, reject); });
+    if (!exists) return { status: "case_not_found" as const, committed: null };
+    const holder: { value: ReturnType<typeof applyCashierFollowupMutation> | null } = { value: null };
+    const transaction = await transact((day) => {
+      holder.value = applyCashierFollowupMutation(day, context, operation);
+      return holder.value.day;
+    });
     if (transaction.committed && holder.value?.committed) return holder.value;
     return { status: holder.value?.status ?? "conflict", committed: null };
   } finally { detach(); }
@@ -2558,4 +2658,101 @@ export const callNextCashierCase = onCall(
 export const startCashierAttention = onCall(
   { region: "us-central1", enforceAppCheck: false },
   async (request) => executeCashierCallable(request, "start"),
+);
+
+const cashierFollowupInput = (value: unknown, operation: CashierFollowupOperation) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const expectedKeys = operation === "pause" ? ["centerId", "queueItemId", "note"] : ["centerId", "queueItemId"];
+  if (Object.keys(input).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(input, key)) ||
+    typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
+    typeof input.queueItemId !== "string" || !windowIdPattern.test(input.queueItemId) ||
+    (operation === "pause" && input.note !== null && typeof input.note !== "string")) return null;
+  const note = operation === "pause" && typeof input.note === "string" ? input.note.trim() : null;
+  if (note && note.length > 100) return null;
+  return { centerId: input.centerId, queueItemId: input.queueItemId, note: note || null };
+};
+
+const cashierFollowupProjection = async (
+  database: ReturnType<typeof getDatabase>, center: CenterConfig, cashier: CenterCashier, dayId: string,
+  committed: CommittedCashierMutation, operation: CashierFollowupOperation,
+) => {
+  const current = committed.caseRecord;
+  const status = operation === "pause" ? "Pago pendiente" :
+    operation === "resume" ? "Atención en caja" : "No se registró su presentación";
+  const destination = operation === "no_show" ? `Ventanilla ${current.assignedWindowNumber}` : cashier.name;
+  await database.ref().update({
+    [`public/turns/${current.publicToken}`]: {
+      centerId: current.centerId, publicCode: current.publicCode, isPriority: current.isPriority,
+      status, serviceType: current.serviceType, serviceLabel: current.serviceLabel, destination,
+      updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
+      paymentMethods: publicPaymentMethods(center),
+    },
+    [`public/displays/${current.centerId}/${dayId}/${current.caseId}`]: operation === "resume" ? {
+      publicCode: current.publicCode, isPriority: current.isPriority, status, destination, updatedAt: current.updatedAt,
+    } : null,
+  });
+};
+
+const executeCashierFollowupCallable = async (
+  request: { auth?: { uid: string }; data: unknown }, operation: CashierFollowupOperation,
+) => {
+  const input = cashierFollowupInput(request.data, operation);
+  if (!input) return { ok: false, outcome: "invalid_request" as const };
+  if (!request.auth?.uid) return { ok: false, outcome: "unauthenticated" as const };
+  const database = getDatabase();
+  const uid = request.auth.uid;
+  const [profileSnapshot, centerSnapshot] = await Promise.all([
+    database.ref(`users/${uid}`).get(), database.ref(`centers/${input.centerId}`).get(),
+  ]);
+  if (!profileSnapshot.exists()) return { ok: false, outcome: "unauthorized" as const };
+  if (!centerSnapshot.exists()) return { ok: false, outcome: "config_unavailable" as const };
+  const profile = profileSnapshot.val() as UserProfile;
+  const center = centerSnapshot.val() as CenterConfig;
+  if (center.centerId !== input.centerId || center.enabled !== true) return { ok: false, outcome: "config_unavailable" as const };
+  const cashier = authorizeCashierStation(profile, uid, input.centerId, valuesOf(center.cashiers));
+  if (!cashier) return { ok: false, outcome: "unauthorized" as const };
+  let dayId: string;
+  try { dayId = dateTimeInZone(new Date(), center.timezone).dayId; }
+  catch { return { ok: false, outcome: "config_unavailable" as const }; }
+  const context: CashierMutationContext = {
+    centerId: input.centerId, sessionId: `${input.centerId}-${dayId}`, cashierId: cashier.cashierId,
+    uid, timestamp: Date.now(), eventId: randomUUID(), queueItemId: input.queueItemId, note: input.note,
+  };
+  const reference = database.ref(`days/${input.centerId}/${dayId}`);
+  try {
+    const result = await runCashierFollowupTransaction(
+      (onValue, onError) => { const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+        return () => reference.off("value", listener); },
+      async (update) => { const transaction = await reference.transaction(
+        (value) => update(value as WindowDay | null), undefined, false); return { committed: transaction.committed }; },
+      context, operation,
+    );
+    if (!result.committed) return { ok: false, outcome: result.status };
+    try {
+      await cashierFollowupProjection(database, center, cashier, dayId, result.committed, operation);
+      return { ok: true, outcome: result.status, ...result.committed };
+    } catch {
+      return { ok: true, outcome: `${result.status}_projection_failed`, ...result.committed };
+    }
+  } catch (error) {
+    console.error({ operation, outcome: "internal_error", stage: "transaction",
+      errorCategory: error instanceof Error ? error.name : "unknown" });
+    return { ok: false, outcome: "internal_error" as const };
+  }
+};
+
+export const pauseCashierPayment = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => executeCashierFollowupCallable(request, "pause"),
+);
+
+export const resumeCashierPayment = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => executeCashierFollowupCallable(request, "resume"),
+);
+
+export const markCashierCaseNoShow = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => executeCashierFollowupCallable(request, "no_show"),
 );

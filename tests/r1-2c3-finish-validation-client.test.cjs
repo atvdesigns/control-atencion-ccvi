@@ -37,8 +37,7 @@ test("controlled failures use clear existing operator feedback", () => {
 
 test("remaining direct day transactions are cashier-only", () => {
   const expected = [
-    "completePaymentRealtime", "pausePaymentRealtime", "resumePausedPaymentRealtime",
-    "markNoShowRealtime",
+    "completePaymentRealtime",
   ];
   assert.equal(store.split("const result = await runTransaction(").length - 1, expected.length);
   for (const name of expected) {

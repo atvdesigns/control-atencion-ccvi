@@ -1024,6 +1024,7 @@ const CaseCard = ({
   showPriorityLabel = false,
   operatorStyle = false,
   contentDrivenHeight = false,
+  fluidWidth = false,
   secondaryMetadata,
 }: {
   caseItem: CaseRecord;
@@ -1035,6 +1036,7 @@ const CaseCard = ({
   showPriorityLabel?: boolean;
   operatorStyle?: boolean;
   contentDrivenHeight?: boolean;
+  fluidWidth?: boolean;
   secondaryMetadata?: React.ReactNode;
 }) => {
   const statusColor = statusColors[caseItem.currentState] ?? ccviPalette.warmGray;
@@ -1050,7 +1052,7 @@ const CaseCard = ({
         borderLeftColor: statusColor,
         borderLeftStyle: "solid",
         borderRadius: operatorStyle ? "20px" : surfaceRadius,
-        width: operatorStyle && !prominent ? "100%" : undefined,
+        width: fluidWidth || (operatorStyle && !prominent) ? "100%" : undefined,
         height: operatorStyle && !prominent
           ? contentDrivenHeight ? "auto" : { xs: "auto", sm: 90 }
           : "100%",
@@ -3040,8 +3042,14 @@ const CashierView = ({
   const [paymentIssue, setPaymentIssue] = useState<{ queueItemId: string; publicCode: string } | null>(null);
   const callPendingRef = useRef(false);
   const startPendingRef = useRef(false);
+  const pausePendingRef = useRef(false);
+  const resumePendingRef = useRef(false);
+  const noShowPendingRef = useRef(false);
   const [callPending, setCallPending] = useState(false);
   const [startPending, setStartPending] = useState(false);
+  const [pausePending, setPausePending] = useState(false);
+  const [resumePending, setResumePending] = useState(false);
+  const [noShowPending, setNoShowPending] = useState(false);
   const waitingCount = Object.values(data.paymentQueue).filter(
     (item) => item.centerId === data.selectedCenterId && item.state === "waiting_cashier",
   ).length;
@@ -3209,7 +3217,7 @@ const CashierView = ({
                   </Card>
                 </Box>
               ) : (
-                <CaseCard caseItem={activeCase} center={center} prominent showPriorityLabel>
+                <CaseCard caseItem={activeCase} center={center} prominent showPriorityLabel operatorStyle fluidWidth>
                   <Alert severity="info">
                     Retirar carpeta <strong>{active.folderCode}</strong> del punto físico compartido.
                   </Alert>
@@ -3240,12 +3248,25 @@ const CashierView = ({
                       <Button
                         variant="outlined"
                         color="warning"
+                        disabled={noShowPending}
                         onClick={async () => {
-                          const next = await markNoShowRealtime(data, active.queueItemId);
-                          setData(() => next);
+                          if (noShowPendingRef.current) return;
+                          noShowPendingRef.current = true;
+                          setNoShowPending(true);
+                          try {
+                            const result = await markNoShowRealtime(data, active.queueItemId);
+                            setData(() => result.data);
+                            if (result.outcome === "no_show_projection_failed") onFeedback("La inasistencia quedó registrada, pero no pudimos actualizar el display.");
+                            else if (result.outcome !== "no_show") onFeedback("No pudimos registrar la inasistencia. Actualice la pantalla e intente nuevamente.");
+                          } catch {
+                            onFeedback("No pudimos confirmar si la inasistencia quedó registrada. Revise la pantalla antes de intentar nuevamente.");
+                          } finally {
+                            noShowPendingRef.current = false;
+                            setNoShowPending(false);
+                          }
                         }}
                       >
-                        No se presentó
+                        {noShowPending ? "Registrando…" : "No se presentó"}
                       </Button>
                     </Stack>
                   )}
@@ -3306,28 +3327,49 @@ const CashierView = ({
 
                   return (
                     <Grid item xs={12} md={6} key={item.queueItemId}>
-                      <CaseCard caseItem={pausedCase} center={center} compact showPriorityLabel>
-                        <Alert severity="warning">
-                          El pago no fue completado. Retome este turno cuando la persona pueda continuar en caja.
-                        </Alert>
+                      <CaseCard
+                        caseItem={pausedCase}
+                        center={center}
+                        compact
+                        showPriorityLabel
+                        operatorStyle
+                        contentDrivenHeight
+                      >
                         {pausedCase.optionalInternalNote && (
-                          <Typography color="text.secondary">
-                            Nota interna: {pausedCase.optionalInternalNote}
-                          </Typography>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                              Nota interna:
+                            </Typography>
+                            <Typography
+                              color="text.secondary"
+                              sx={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+                            >
+                              {pausedCase.optionalInternalNote}
+                            </Typography>
+                          </Box>
                         )}
                         <Button
                           variant="outlined"
-                          disabled={Boolean(active)}
+                          disabled={Boolean(active) || resumePending}
                           onClick={async () => {
-                            const next = await resumePausedPaymentRealtime(
-                              data,
-                              item.queueItemId,
-                              cashierId,
-                            );
-                            setData(() => next);
+                            if (resumePendingRef.current) return;
+                            resumePendingRef.current = true;
+                            setResumePending(true);
+                            try {
+                              const result = await resumePausedPaymentRealtime(data, item.queueItemId, cashierId);
+                              setData(() => result.data);
+                              if (result.outcome === "resumed_projection_failed") onFeedback("La atención se retomó, pero no pudimos actualizar el display.");
+                              else if (result.outcome === "cashier_busy") onFeedback("Finalice o pause la atención actual antes de retomar otro turno.");
+                              else if (result.outcome !== "resumed") onFeedback("No pudimos retomar esta atención. Actualice la pantalla e intente nuevamente.");
+                            } catch {
+                              onFeedback("No pudimos confirmar si la atención fue retomada. Revise la pantalla antes de intentar nuevamente.");
+                            } finally {
+                              resumePendingRef.current = false;
+                              setResumePending(false);
+                            }
                           }}
                         >
-                          Retomar atención
+                          {resumePending ? "Retomando…" : "Retomar atención"}
                         </Button>
                       </CaseCard>
                     </Grid>
@@ -3342,12 +3384,24 @@ const CashierView = ({
         open={Boolean(paymentIssue)}
         publicCode={paymentIssue?.publicCode ?? ""}
         onCancel={() => setPaymentIssue(null)}
+        pending={pausePending}
         onConfirm={async (note) => {
-          if (!paymentIssue) return;
+          if (!paymentIssue || pausePendingRef.current) return;
+          pausePendingRef.current = true;
+          setPausePending(true);
           const queueItemId = paymentIssue.queueItemId;
           setPaymentIssue(null);
-          const next = await pausePaymentRealtime(data, queueItemId, cashierId, note);
-          setData(() => next);
+          try {
+            const result = await pausePaymentRealtime(data, queueItemId, cashierId, note);
+            setData(() => result.data);
+            if (result.outcome === "paused_projection_failed") onFeedback("El pago quedó pendiente, pero no pudimos actualizar el display.");
+            else if (result.outcome !== "paused") onFeedback("No pudimos dejar el pago pendiente. Actualice la pantalla e intente nuevamente.");
+          } catch {
+            onFeedback("No pudimos confirmar si el pago quedó pendiente. Revise la pantalla antes de intentar nuevamente.");
+          } finally {
+            pausePendingRef.current = false;
+            setPausePending(false);
+          }
         }}
       />
     </Page>
@@ -3359,11 +3413,13 @@ const PaymentIssueDialog = ({
   publicCode,
   onCancel,
   onConfirm,
+  pending,
 }: {
   open: boolean;
   publicCode: string;
   onCancel: () => void;
-  onConfirm: (note: string | null) => void;
+  onConfirm: (note: string | null) => void | Promise<void>;
+  pending: boolean;
 }) => {
   const [note, setNote] = useState("");
 
@@ -3397,7 +3453,15 @@ const PaymentIssueDialog = ({
             label="Nota interna opcional"
             value={note}
             onChange={(event) => setNote(event.target.value)}
-            helperText="No escriba datos personales. Use una nota breve solo si ayuda al seguimiento interno."
+            inputProps={{ maxLength: 100 }}
+            helperText={
+              <Box component="span" sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
+                <span>No escriba datos personales. Use una nota breve solo si ayuda al seguimiento interno.</span>
+                <Box component="span" sx={{ whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                  {note.length}/100
+                </Box>
+              </Box>
+            }
             multiline
             minRows={2}
             InputLabelProps={{ shrink: true }}
@@ -3413,9 +3477,10 @@ const PaymentIssueDialog = ({
           color="warning"
           startIcon={<WarningAmber />}
           sx={modalPrimaryActionSx}
+          disabled={pending}
           onClick={() => onConfirm(note.trim() || null)}
         >
-          Registrar pago no realizado
+          {pending ? "Registrando…" : "Registrar pago no realizado"}
         </Button>
       </DialogActions>
     </Dialog>
