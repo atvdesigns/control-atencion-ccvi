@@ -28,6 +28,7 @@ import {
   resumeWindowDocumentationCallable,
   updateCasePriorityCallable,
   type CallNextWindowCaseOutcome,
+  type FinishWindowDocumentOutcome,
   database,
   publicDisplayCallEventUpdate,
   publicDisplayEntryUpdate,
@@ -1489,6 +1490,12 @@ export const finishDocumentValidation = (
   };
 };
 
+export interface FinishDocumentValidationResult {
+  data: AppData;
+  outcome: FinishWindowDocumentOutcome;
+  caseRecord: CaseRecord;
+}
+
 export const finishDocumentValidationRealtime = async (
   data: AppData,
   caseId: string,
@@ -1498,9 +1505,12 @@ export const finishDocumentValidationRealtime = async (
     customerName?: string;
     customerPhone?: string;
   },
-): Promise<AppData> => {
+): Promise<FinishDocumentValidationResult> => {
   if (!database) {
-    return finishDocumentValidation(data, caseId, status, role, rejectedContact);
+    const nextData = finishDocumentValidation(data, caseId, status, role, rejectedContact);
+    const caseRecord = nextData.cases[caseId];
+    if (!caseRecord) throw new Error("INVALID_FINISH_WINDOW_DOCUMENT_RESPONSE");
+    return { data: nextData, outcome: status, caseRecord };
   }
   const base = ensureSession(data);
   const response = await finishWindowDocumentValidationCallable(
@@ -1517,11 +1527,13 @@ export const finishDocumentValidationRealtime = async (
     cases: { ...base.cases, [caseId]: response.caseRecord },
     events: [...response.events, ...base.events],
   };
-  if (status !== "approved") return nextData;
+  if (status !== "approved") {
+    return { data: nextData, outcome: response.outcome, caseRecord: response.caseRecord };
+  }
   if (!response.metadata || !response.paymentItem) {
     throw new Error("INVALID_FINISH_WINDOW_DOCUMENT_RESPONSE");
   }
-  return {
+  const approvedData: AppData = {
     ...nextData,
     sessions: {
       ...base.sessions,
@@ -1535,6 +1547,7 @@ export const finishDocumentValidationRealtime = async (
       [response.paymentItem.queueItemId]: response.paymentItem,
     },
   };
+  return { data: approvedData, outcome: response.outcome, caseRecord: response.caseRecord };
 };
 
 export const pauseWindowDocumentation = (

@@ -1734,6 +1734,7 @@ const OperatorView = ({
   const [selectedPriorityType, setSelectedPriorityType] = useState<PriorityType | "">("");
   const [rejectionDialogCase, setRejectionDialogCase] = useState<CaseRecord | null>(null);
   const [incompleteDecisionCase, setIncompleteDecisionCase] = useState<CaseRecord | null>(null);
+  const [approvalHandoffCase, setApprovalHandoffCase] = useState<CaseRecord | null>(null);
   const [rejectedCustomerName, setRejectedCustomerName] = useState("");
   const [rejectedCustomerPhone, setRejectedCustomerPhone] = useState("");
   const [isCallingNext, setIsCallingNext] = useState(false);
@@ -2144,7 +2145,15 @@ const OperatorView = ({
                               "approved",
                               role,
                             ),
-                            onResult: (next) => setData(() => next),
+                            onResult: (result) => {
+                              setData(() => result.data);
+                              if (
+                                (result.outcome === "approved" || result.outcome === "approved_projection_failed") &&
+                                result.caseRecord.folderCode
+                              ) {
+                                setApprovalHandoffCase(result.caseRecord);
+                              }
+                            },
                             onError: () => onFeedback("No pudimos aprobar la documentación. Intente nuevamente."),
                           });
                         }}
@@ -2647,6 +2656,71 @@ const OperatorView = ({
         </DialogActions>
       </Dialog>
       <Dialog
+        open={Boolean(approvalHandoffCase)}
+        disableEscapeKeyDown
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="approval-handoff-title"
+        aria-describedby="approval-handoff-description"
+      >
+        <DialogTitle id="approval-handoff-title" sx={{ pb: 1 }}>
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <CheckCircle aria-hidden="true" sx={{ color: ccviPalette.success, fontSize: 32 }} />
+            <Typography component="span" variant="h5">Documentación aprobada</Typography>
+          </Stack>
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2.5} sx={{ pt: 1 }}>
+            <Typography id="approval-handoff-description">
+              El trámite documental finalizó correctamente.
+            </Typography>
+            <Box
+              sx={{
+                border: `1px solid ${ccviPalette.border}`,
+                borderRadius: 2,
+                bgcolor: "background.default",
+                px: { xs: 2, sm: 3 },
+                py: { xs: 2.5, sm: 3 },
+                textAlign: "center",
+                overflow: "hidden",
+              }}
+            >
+              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 700, mb: 0.5 }}>
+                Carpeta asignada
+              </Typography>
+              <Typography
+                variant="h2"
+                aria-label={`Carpeta asignada ${approvalHandoffCase?.folderCode ?? ""}`}
+                sx={{
+                  color: ccviPalette.navy,
+                  fontSize: "clamp(2rem, 10vw, 3.75rem)",
+                  fontWeight: 800,
+                  letterSpacing: "0.03em",
+                  lineHeight: 1.1,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {approvalHandoffCase?.folderCode}
+              </Typography>
+            </Box>
+            <Typography>
+              Anote este número en la carpeta física. El usuario continuará su atención en caja.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3, pt: 2 }}>
+          <Button
+            autoFocus
+            fullWidth
+            variant="contained"
+            onClick={() => setApprovalHandoffCase(null)}
+            sx={{ minHeight: 52 }}
+          >
+            Finalizar atención
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
         open={Boolean(priorityRemovalCase)}
         onClose={() => setPriorityRemovalCase(null)}
         fullWidth
@@ -2731,7 +2805,7 @@ const OperatorView = ({
                 pendingRef: windowTransitionPendingRef,
                 setLoading: setIsWindowTransitionPending,
                 request: () => finishDocumentValidationRealtime(data, caseId, "incomplete", role),
-                onResult: (next) => { setData(() => next); setIncompleteDecisionCase(null); },
+                onResult: (result) => { setData(() => result.data); setIncompleteDecisionCase(null); },
                 onError: () => onFeedback("No pudimos registrar la documentación incompleta. Intente nuevamente."),
               });
             }}
@@ -2808,8 +2882,8 @@ const OperatorView = ({
                   role,
                   rejectedContact,
                 ),
-                onResult: (next) => {
-                  setData(() => next);
+                onResult: (result) => {
+                  setData(() => result.data);
                   closeRejectionDialog();
                 },
                 onError: () => onFeedback("No pudimos rechazar el trámite. Intente nuevamente."),
