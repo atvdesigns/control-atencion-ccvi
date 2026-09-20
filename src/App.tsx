@@ -3045,11 +3045,14 @@ const CashierView = ({
   const pausePendingRef = useRef(false);
   const resumePendingRef = useRef(false);
   const noShowPendingRef = useRef(false);
+  const completePendingRef = useRef(false);
   const [callPending, setCallPending] = useState(false);
   const [startPending, setStartPending] = useState(false);
   const [pausePending, setPausePending] = useState(false);
   const [resumePending, setResumePending] = useState(false);
   const [noShowPending, setNoShowPending] = useState(false);
+  const [completePending, setCompletePending] = useState(false);
+  const [paymentCompletion, setPaymentCompletion] = useState<{ folderCode: string | null } | null>(null);
   const waitingCount = Object.values(data.paymentQueue).filter(
     (item) => item.centerId === data.selectedCenterId && item.state === "waiting_cashier",
   ).length;
@@ -3276,12 +3279,36 @@ const CashierView = ({
                         variant="contained"
                         color="success"
                         startIcon={<CheckCircle />}
+                        disabled={completePending}
                         onClick={async () => {
-                          const next = await completePaymentRealtime(data, active.queueItemId);
-                          setData(() => next);
+                          if (completePendingRef.current) return;
+                          completePendingRef.current = true;
+                          setCompletePending(true);
+                          try {
+                            const result = await completePaymentRealtime(data, active.queueItemId);
+                            setData(() => result.data);
+                            if (
+                              result.outcome === "completed" ||
+                              result.outcome === "completed_projection_failed"
+                            ) {
+                              setPaymentCompletion({
+                                folderCode: result.data.cases[active.caseId]?.folderCode ?? null,
+                              });
+                            }
+                            if (result.outcome === "completed_projection_failed") {
+                              onFeedback("El pago quedó completado, pero no pudimos actualizar el display. No vuelva a registrarlo.");
+                            } else if (result.outcome !== "completed") {
+                              onFeedback("No pudimos completar este pago. Actualice la pantalla e intente nuevamente.");
+                            }
+                          } catch {
+                            onFeedback("No pudimos confirmar si el pago quedó completado. Revise la pantalla antes de intentar nuevamente.");
+                          } finally {
+                            completePendingRef.current = false;
+                            setCompletePending(false);
+                          }
                         }}
                       >
-                        Pago completado
+                        {completePending ? "Completando…" : "Pago completado"}
                       </Button>
                       <Button
                         variant="outlined"
@@ -3380,6 +3407,94 @@ const CashierView = ({
           </Accordion>
         </Grid>
       </Grid>
+      <Dialog
+        open={Boolean(paymentCompletion)}
+        disableEscapeKeyDown
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="cashier-payment-completion-title"
+        aria-describedby="cashier-payment-completion-description"
+        slotProps={{
+          backdrop: { sx: modalBackdropSx },
+          paper: {
+            sx: {
+              ...modalPaperSx,
+              position: "relative",
+            },
+          },
+        }}
+      >
+        <DialogTitle
+          id="cashier-payment-completion-title"
+          sx={{ p: 0, display: "flex", justifyContent: "center" }}
+        >
+          <Typography
+            variant="caption"
+            component="span"
+            fontWeight={700}
+            sx={{
+              px: 2,
+              py: 1.25,
+              bgcolor: ccviPalette.navy,
+              color: "common.white",
+              borderRadius: "0 0 12px 12px",
+              textAlign: "center",
+              lineHeight: 1.4,
+            }}
+          >
+            Pago completado
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={{ ...modalContentSx, pt: { xs: 2.5, sm: 2 } }}>
+          <Stack spacing={2} alignItems="center" textAlign="center" sx={{ mx: "auto", maxWidth: 544 }}>
+            <CheckCircle aria-hidden="true" sx={{ color: ccviPalette.success, fontSize: 48 }} />
+            <Typography id="cashier-payment-completion-description" fontWeight={600} color="text.secondary">
+              La atención finalizó correctamente.
+            </Typography>
+            <Box role="status" aria-live="polite" aria-atomic="true" sx={{ width: "100%" }}>
+              <Typography fontWeight={700} color="text.secondary">
+                Carpeta asociada
+              </Typography>
+              {paymentCompletion?.folderCode ? (
+                <Typography
+                  component="p"
+                  aria-label={`Carpeta asociada ${paymentCompletion.folderCode}`}
+                  sx={{
+                    mt: 0.5,
+                    color: ccviPalette.navy,
+                    fontSize: { xs: "3.25rem", sm: "5rem" },
+                    fontWeight: 800,
+                    letterSpacing: "0.03em",
+                    lineHeight: 1.08,
+                    fontVariantNumeric: "tabular-nums",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {paymentCompletion.folderCode}
+                </Typography>
+              ) : (
+                <Typography component="p" color="text.secondary" sx={{ mt: 0.5, fontWeight: 600 }}>
+                  No disponible
+                </Typography>
+              )}
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5, maxWidth: 520, textWrap: "pretty" }}>
+              Puede entregar la documentación al cliente y continuar con la siguiente atención.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ ...modalActionsSx, justifyContent: "center" }}>
+          <Button
+            autoFocus
+            variant="contained"
+            color="secondary"
+            onClick={() => setPaymentCompletion(null)}
+            sx={{ ...modalPrimaryActionSx, minWidth: { xs: "100%", sm: 220 } }}
+          >
+            Finalizar atención
+          </Button>
+        </DialogActions>
+      </Dialog>
       <PaymentIssueDialog
         open={Boolean(paymentIssue)}
         publicCode={paymentIssue?.publicCode ?? ""}

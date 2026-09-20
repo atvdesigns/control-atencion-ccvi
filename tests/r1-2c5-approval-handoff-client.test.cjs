@@ -91,5 +91,5 @@ test("incomplete and rejection dialogs use the Window modal hierarchy without ch
 test("recently processed retains folderCode and no Window day write is introduced", () => {
   assert.match(app, /<Typography variant="h5">Procesados recientemente<\/Typography>/);
   assert.match(app, /label=\{`Carpeta \$\{caseItem\.folderCode\}`\}/);
-  assert.equal(store.split("const result = await runTransaction(").length - 1, 1);
+  assert.equal(store.split("const result = await runTransaction(").length - 1, 0);
 });

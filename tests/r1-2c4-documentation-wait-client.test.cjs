@@ -67,10 +67,6 @@ test("explicit profile windowId precedes safe legacy role derivation", () => {
   assert.match(service, /value\.windowId !== undefined/);
 });
 
-test("remaining direct day write is deferred Cashier Complete Payment", () => {
-  assert.equal(store.split("const result = await runTransaction(").length - 1, 1);
-  for (const name of ["completePaymentRealtime"]) {
-    const start = store.indexOf(`export const ${name}`); const end = store.indexOf("\nexport const ", start + 1);
-    const body = store.slice(start, end === -1 ? undefined : end); assert.match(body, /runTransaction/); assert.match(body, /`days\//);
-  }
+test("production client has no remaining direct day write", () => {
+  assert.equal(store.split("const result = await runTransaction(").length - 1, 0);
 });

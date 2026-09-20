@@ -27,6 +27,7 @@ interface CenterCashier {
   cashierId: string;
   centerId?: string;
   name: string;
+  cashierName?: string;
   enabled: boolean;
   displayOrder: number;
 }
@@ -40,6 +41,7 @@ interface CenterConfig {
   enabled: boolean;
   windows: CenterWindow[] | Record<string, CenterWindow>;
   cashiers?: CenterCashier[] | Record<string, CenterCashier>;
+  cashierCommissionRate?: number;
   documentaryRequirements?: Record<
     ServiceType,
     Array<{ label?: unknown; enabled?: unknown }> | Record<string, { label?: unknown; enabled?: unknown }>
@@ -378,7 +380,64 @@ export const runCashierTransaction = async (
   } finally { detach(); }
 };
 
-type CashierFollowupOperation = "pause" | "resume" | "no_show";
+type CashierFollowupOperation = "pause" | "resume" | "no_show" | "complete";
+
+export const applyCompleteCashierPaymentMutation = (
+  currentDay: WindowDay | null,
+  context: CashierMutationContext,
+  cashierName: string | undefined,
+  commissionRate: number | undefined,
+) => {
+  if (!currentDay || !context.queueItemId) {
+    return { status: "case_not_found" as const, day: undefined, committed: null };
+  }
+  const cases = recordOf<WindowCase>(currentDay.cases);
+  const queue = recordOf<CashierQueueItem>(currentDay.paymentQueue);
+  const item = queue[context.queueItemId];
+  const current = item ? cases[item.caseId] : undefined;
+  if (!item || !current) return { status: "case_not_found" as const, day: undefined, committed: null };
+  if (item.centerId !== context.centerId || item.sessionId !== context.sessionId ||
+    current.centerId !== context.centerId || current.sessionId !== context.sessionId ||
+    item.cashierId !== context.cashierId || current.cashierId !== context.cashierId) {
+    return { status: "unauthorized" as const, day: undefined, committed: null };
+  }
+  if (item.state !== "in_cashier_attention" || current.currentState !== "in_cashier_attention" ||
+    current.paymentTicketId !== item.queueItemId || current.folderCode !== item.folderCode ||
+    current.publicCode !== item.publicCode) {
+    return { status: "invalid_case_state" as const, day: undefined, committed: null };
+  }
+  const cashierDurationMs = typeof current.cashierStartedAt === "number"
+    ? Math.max(0, context.timestamp - current.cashierStartedAt) : undefined;
+  const caseRecord: WindowCase = {
+    ...current,
+    currentState: "completed",
+    paymentCompletedAt: context.timestamp,
+    ...(cashierName === undefined ? {} : { cashierNameAtCompletion: cashierName }),
+    ...(cashierDurationMs === undefined ? {} : { cashierDurationMs }),
+    ...(commissionRate === undefined ? {} : {
+      commissionRateApplied: commissionRate,
+      commissionAmount: commissionRate,
+    }),
+    completedAt: context.timestamp,
+    updatedAt: context.timestamp,
+  };
+  const queueItem: CashierQueueItem = {
+    ...item,
+    state: "completed",
+    completedAt: context.timestamp,
+    updatedAt: context.timestamp,
+  };
+  const event = {
+    eventId: context.eventId, centerId: context.centerId, sessionId: context.sessionId,
+    caseId: current.caseId, actorRole: "cashier", actorId: context.uid, cashierId: context.cashierId,
+    action: "payment_completed", fromState: current.currentState, toState: "completed",
+    timestamp: context.timestamp, optionalNote: null,
+  };
+  const committed = { caseRecord, queueItem, event };
+  return { status: "completed" as const, committed, day: { ...currentDay,
+    cases: { ...cases, [current.caseId]: caseRecord }, paymentQueue: { ...queue, [item.queueItemId]: queueItem },
+    events: { ...recordOf(currentDay.events), [context.eventId]: event } } as WindowDay };
+};
 
 export const applyCashierFollowupMutation = (
   currentDay: WindowDay | null,
@@ -2678,9 +2737,10 @@ const cashierFollowupProjection = async (
   committed: CommittedCashierMutation, operation: CashierFollowupOperation,
 ) => {
   const current = committed.caseRecord;
-  const status = operation === "pause" ? "Pago pendiente" :
-    operation === "resume" ? "Atención en caja" : "No se registró su presentación";
-  const destination = operation === "no_show" ? `Ventanilla ${current.assignedWindowNumber}` : cashier.name;
+  const status = operation === "pause" ? "Pago pendiente" : operation === "resume" ? "Atención en caja" :
+    operation === "complete" ? "Proceso finalizado con éxito" : "No se registró su presentación";
+  const destination = operation === "no_show" ? `Ventanilla ${current.assignedWindowNumber}` :
+    operation === "complete" ? null : cashier.name;
   await database.ref().update({
     [`public/turns/${current.publicToken}`]: {
       centerId: current.centerId, publicCode: current.publicCode, isPriority: current.isPriority,
@@ -2721,13 +2781,22 @@ const executeCashierFollowupCallable = async (
   };
   const reference = database.ref(`days/${input.centerId}/${dayId}`);
   try {
-    const result = await runCashierFollowupTransaction(
-      (onValue, onError) => { const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
-        return () => reference.off("value", listener); },
-      async (update) => { const transaction = await reference.transaction(
-        (value) => update(value as WindowDay | null), undefined, false); return { committed: transaction.committed }; },
-      context, operation,
-    );
+    const subscribe = (onValue: (exists: boolean) => void, onError: (error: unknown) => void) => {
+      const listener = reference.on("value", (snapshot) => onValue(snapshot.exists()), onError);
+      return () => reference.off("value", listener);
+    };
+    const transact = async (update: (day: WindowDay | null) => WindowDay | undefined) => {
+      const transaction = await reference.transaction(
+        (value) => update(value as WindowDay | null), undefined, false);
+      return { committed: transaction.committed };
+    };
+    const commissionRate = typeof center.cashierCommissionRate === "number" &&
+      Number.isFinite(center.cashierCommissionRate) && center.cashierCommissionRate >= 0
+      ? center.cashierCommissionRate : undefined;
+    const result = operation === "complete"
+      ? await runCashierTransaction(subscribe, transact, (day) =>
+        applyCompleteCashierPaymentMutation(day, context, cashier.cashierName?.trim() || undefined, commissionRate))
+      : await runCashierFollowupTransaction(subscribe, transact, context, operation);
     if (!result.committed) return { ok: false, outcome: result.status };
     try {
       await cashierFollowupProjection(database, center, cashier, dayId, result.committed, operation);
@@ -2755,4 +2824,9 @@ export const resumeCashierPayment = onCall(
 export const markCashierCaseNoShow = onCall(
   { region: "us-central1", enforceAppCheck: false },
   async (request) => executeCashierFollowupCallable(request, "no_show"),
+);
+
+export const completeCashierPayment = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => executeCashierFollowupCallable(request, "complete"),
 );

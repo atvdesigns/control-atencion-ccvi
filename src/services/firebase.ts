@@ -98,6 +98,7 @@ export type CashierCommandOutcome =
   | "called" | "called_projection_failed" | "started" | "started_projection_failed"
   | "paused" | "paused_projection_failed" | "resumed" | "resumed_projection_failed"
   | "no_show" | "no_show_projection_failed"
+  | "completed" | "completed_projection_failed"
   | "queue_empty" | "cashier_busy" | "case_not_found" | "invalid_case_state"
   | "unauthenticated" | "unauthorized" | "invalid_request" | "config_unavailable"
   | "conflict" | "internal_error";
@@ -303,7 +304,7 @@ export const callNextWindowCaseCallable = async (
 
 const cashierCommandCallable = async (
   name: "callNextCashierCase" | "startCashierAttention" | "pauseCashierPayment" |
-    "resumeCashierPayment" | "markCashierCaseNoShow",
+    "resumeCashierPayment" | "markCashierCaseNoShow" | "completeCashierPayment",
   centerId: string,
   queueItemId?: string,
   note?: string | null,
@@ -315,6 +316,7 @@ const cashierCommandCallable = async (
   const outcomes: CashierCommandOutcome[] = [
     "called", "called_projection_failed", "started", "started_projection_failed", "queue_empty",
     "paused", "paused_projection_failed", "resumed", "resumed_projection_failed", "no_show", "no_show_projection_failed",
+    "completed", "completed_projection_failed",
     "cashier_busy", "case_not_found", "invalid_case_state", "unauthenticated", "unauthorized",
     "invalid_request", "config_unavailable", "conflict", "internal_error",
   ];
@@ -339,6 +341,9 @@ export const resumeCashierPaymentCallable = (centerId: string, queueItemId: stri
 
 export const markCashierCaseNoShowCallable = (centerId: string, queueItemId: string) =>
   cashierCommandCallable("markCashierCaseNoShow", centerId, queueItemId);
+
+export const completeCashierPaymentCallable = (centerId: string, queueItemId: string) =>
+  cashierCommandCallable("completeCashierPayment", centerId, queueItemId);
 
 export const createPriorityArrivalCallable = async (
   centerId: string,

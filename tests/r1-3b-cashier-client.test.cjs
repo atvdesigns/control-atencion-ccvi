@@ -9,7 +9,7 @@ const fn = fs.readFileSync(path.join(root,'functions/src/index.ts'),'utf8');
 const body=(s,n)=>{const a=s.indexOf(`export const ${n}`); const b=s.indexOf('\nexport const ',a+1); return s.slice(a,b<0?undefined:b)};
 test('follow-up mutations delegate to trusted callables without day writes',()=>{
   for(const [name,call] of [['pausePaymentRealtime','pauseCashierPaymentCallable'],['resumePausedPaymentRealtime','resumeCashierPaymentCallable'],['markNoShowRealtime','markCashierCaseNoShowCallable']]){assert.match(body(store,name),new RegExp(call));assert.doesNotMatch(body(store,name),/runTransaction|`days\//)}
-  assert.equal(store.split('const result = await runTransaction(').length-1,1); assert.match(body(store,'completePaymentRealtime'),/runTransaction/);
+  assert.equal(store.split('const result = await runTransaction(').length-1,0); assert.match(body(store,'completePaymentRealtime'),/completeCashierPaymentCallable/);
 });
 test('browser payload never supplies cashier authority',()=>{
   assert.match(service,/pauseCashierPaymentCallable = \(centerId: string, queueItemId: string, note: string \| null\)/);

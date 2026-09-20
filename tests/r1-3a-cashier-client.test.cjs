@@ -27,12 +27,9 @@ test("callable payloads contain no cashier authority supplied by the browser", (
   assert.doesNotMatch(body(service, "callNextCashierCaseCallable"), /cashierId|uid|role/);
 });
 
-test("only deferred Complete Payment retains a direct private transaction", () => {
-  assert.equal(store.split("const result = await runTransaction(").length - 1, 1);
-  for (const name of ["completePaymentRealtime"]) {
-    assert.match(body(store, name), /runTransaction/);
-    assert.match(body(store, name), /`days\//);
-  }
+test("Complete Payment now delegates without a direct private transaction", () => {
+  assert.equal(store.split("const result = await runTransaction(").length - 1, 0);
+  assert.match(body(store, "completePaymentRealtime"), /completeCashierPaymentCallable/);
 });
 
 test("Call Next and Start have separate synchronous pending guards and clear feedback", () => {

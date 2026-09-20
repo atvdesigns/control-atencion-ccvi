@@ -35,16 +35,6 @@ test("controlled failures use clear existing operator feedback", () => {
   assert.match(app, /No pudimos rechazar el trámite\. Intente nuevamente\./);
 });
 
-test("remaining direct day transactions are cashier-only", () => {
-  const expected = [
-    "completePaymentRealtime",
-  ];
-  assert.equal(store.split("const result = await runTransaction(").length - 1, expected.length);
-  for (const name of expected) {
-    const start = store.indexOf(`export const ${name}`);
-    const end = store.indexOf("\nexport const ", start + 1);
-    const body = store.slice(start, end === -1 ? undefined : end);
-    assert.match(body, /runTransaction/);
-    assert.match(body, /`days\//);
-  }
+test("production client has no remaining direct day transaction", () => {
+  assert.equal(store.split("const result = await runTransaction(").length - 1, 0);
 });
