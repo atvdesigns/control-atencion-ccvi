@@ -2098,6 +2098,10 @@ const createWindowTransitionCallable = (operation: WindowTransitionOperation) =>
             publicCode: current.publicCode, isPriority: current.isPriority, status, destination,
             updatedAt: current.updatedAt,
           } : null,
+          [`public/displays/${centerId}/${dayId}/${caseId}`]: operation === "start" ? {
+            publicCode: current.publicCode, isPriority: current.isPriority, status, destination,
+            updatedAt: current.updatedAt,
+          } : null,
         });
       });
       finish(response.outcome);

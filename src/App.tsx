@@ -3699,6 +3699,14 @@ const DisplayView = ({ data }: { data: AppData }) => {
     .sort((a, b) => b.calledAt - a.calledAt);
   const windowCalls = activeCalls.filter((event) => event.destinationType === "window").slice(0, 2);
   const cashierCalls = activeCalls.filter((event) => event.destinationType === "cashier").slice(0, 5);
+  const isActiveCall = (event: PublicDisplayCallEvent) => activeCalls.some((active) =>
+    active.publicCode === event.publicCode &&
+    active.destinationType === event.destinationType &&
+    active.destinationLabel === event.destinationLabel,
+  );
+  const currentActiveCall = currentCall && isActiveCall(currentCall)
+    ? currentCall
+    : newestEvents.find(isActiveCall) ?? null;
 
   return (
     <Box
@@ -3736,7 +3744,7 @@ const DisplayView = ({ data }: { data: AppData }) => {
             title="Llamando ahora"
             meta="EN PANTALLA"
             icon={<Campaign />}
-            entries={currentCall ? [currentCall] : []}
+            entries={currentActiveCall ? [currentActiveCall] : []}
             current
           />
         </Box>
