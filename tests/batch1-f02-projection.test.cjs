@@ -8,7 +8,7 @@ const functionsRequire = createRequire(path.join(root, "functions/package.json")
 const { buildOperationalViews } = functionsRequire("./lib/index.js");
 
 const center = {
-  windows: [{ windowId: "window-1" }, { windowId: "window-2" }],
+  windows: [{ windowId: "window-1", windowNumber: 1 }, { windowId: "window-2", windowNumber: 2 }],
   cashiers: [{ cashierId: "cashier-1" }, { cashierId: "cashier-2" }],
 };
 const day = {
@@ -81,5 +81,6 @@ test("Operational projections contain no private trace events", () => {
 test("Operational metadata omits counters and sequence internals", () => {
   assert.deepEqual(views.windows["window-1"].metadata, {
     sessionId: "center-2026-09-19", centerId: "center", date: "2026-09-19", status: "open",
+    windowId: "window-1", windowNumber: 1,
   });
 });

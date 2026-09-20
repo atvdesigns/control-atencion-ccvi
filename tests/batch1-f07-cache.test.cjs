@@ -56,7 +56,8 @@ test("every auth identity transition invalidates previous operational state", ()
 
 test("private subscription requires an authenticated scoped profile", () => {
   assert.match(app, /if \(!authenticatedProfile\) return/);
-  assert.match(app, /role: "window" as const, windowId: authenticatedProfile\.windowId/);
+  assert.match(app, /windowForOperatorProfile\(getCurrentCenter\(data\), authenticatedProfile\)/);
+  assert.match(app, /role: "window" as const, windowId: resolvedOperatorWindow\.windowId/);
   assert.match(app, /role: "cashier" as const, cashierId: authenticatedProfile\.cashierId/);
 });
 

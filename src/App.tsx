@@ -5497,12 +5497,15 @@ const App = () => {
     if (authenticatedProfile && !hasAuthorizedCenter) return;
     if (!authenticatedProfile) return;
 
+    const resolvedOperatorWindow = authenticatedProfile.role === "operator-window-1" || authenticatedProfile.role === "operator-window-2"
+      ? windowForOperatorProfile(getCurrentCenter(data), authenticatedProfile)
+      : null;
     const scope = authenticatedProfile.role === "admin"
       ? { role: "admin" as const }
       : authenticatedProfile.role === "cashier" && authenticatedProfile.cashierId
         ? { role: "cashier" as const, cashierId: authenticatedProfile.cashierId }
-        : (authenticatedProfile.role === "operator-window-1" || authenticatedProfile.role === "operator-window-2") && authenticatedProfile.windowId
-          ? { role: "window" as const, windowId: authenticatedProfile.windowId }
+        : resolvedOperatorWindow
+          ? { role: "window" as const, windowId: resolvedOperatorWindow.windowId }
           : null;
     if (!scope) return;
 
@@ -5522,7 +5525,7 @@ const App = () => {
       active = false;
       unsubscribe();
     };
-  }, [authenticatedProfile, hasAuthorizedCenter, selectedCenterId, selectedDayId]);
+  }, [authenticatedProfile, data.centers, hasAuthorizedCenter, selectedCenterId, selectedDayId]);
 
   useEffect(() => {
     if (authSession.status === "authenticated" && privateAccessRequested) {

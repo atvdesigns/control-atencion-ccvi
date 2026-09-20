@@ -38,8 +38,8 @@ const centerId = "ccvi-san-bernardo";
 const sessionId = `${centerId}-2026-09-16`;
 const windowId = "window-1";
 const windows = [
-  { windowId, windowNumber: 1 },
-  { windowId: "window-2", windowNumber: 2 },
+  { windowId, windowNumber: 1, enabled: true },
+  { windowId: "window-2", windowNumber: 2, enabled: true },
 ];
 const profile = (overrides = {}) => ({
   uid: "user-1",

@@ -104,6 +104,10 @@ type OperationalProjection = {
   events: Record<string, never>;
 };
 
+type WindowOperationalProjection = OperationalProjection & {
+  metadata: Record<string, unknown> & { windowId: string; windowNumber: number };
+};
+
 const allowlistedRecord = (value: Record<string, unknown>, fields: readonly string[]) =>
   Object.fromEntries(fields.flatMap((field) => value[field] === undefined ? [] : [[field, value[field]]]));
 
@@ -150,7 +154,10 @@ export const buildOperationalViews = (
   );
   const metadata = operationalMetadata(day);
   const emptyView = (): OperationalProjection => ({ metadata, cases: {}, paymentQueue: {}, events: {} });
-  const windowViews = Object.fromEntries(windows.map((windowItem) => [windowItem.windowId, emptyView()]));
+  const windowViews = Object.fromEntries(windows.map((windowItem) => [windowItem.windowId, {
+    ...emptyView(),
+    metadata: { ...metadata, windowId: windowItem.windowId, windowNumber: windowItem.windowNumber },
+  }])) as Record<string, WindowOperationalProjection>;
   const cashierViews = Object.fromEntries(cashiers.map((cashier) => [cashier.cashierId, emptyView()]));
 
   for (const [caseId, caseValue] of Object.entries(cases)) {
@@ -656,6 +663,23 @@ export const selectNextWindowCase = (
   return regular[0] ?? priority[0];
 };
 
+export const resolveAuthorizedWindow = (
+  profile: UserProfile | null,
+  uid: string,
+  centerId: string,
+  windows: CenterWindow[],
+) => {
+  if (!profile || profile.uid !== uid || profile.enabled !== true) return null;
+  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) return null;
+  if (profile.role !== "operator-window-1" && profile.role !== "operator-window-2") return null;
+  const explicitWindowId = typeof profile.windowId === "string" && profile.windowId ? profile.windowId : null;
+  const legacyWindowNumber = profile.role === "operator-window-1" ? 1 : 2;
+  const windowItem = explicitWindowId
+    ? windows.find((item) => item.windowId === explicitWindowId)
+    : windows.find((item) => item.windowNumber === legacyWindowNumber);
+  return windowItem?.enabled === true ? windowItem : null;
+};
+
 export const authorizedWindowId = (
   profile: UserProfile | null,
   uid: string,
@@ -663,12 +687,7 @@ export const authorizedWindowId = (
   requestedWindowId: string,
   windows: CenterWindow[],
 ) => {
-  if (!profile || profile.uid !== uid || profile.enabled !== true) return null;
-  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) return null;
-  const windowNumber = profile.role === "operator-window-1" ? 1 :
-    profile.role === "operator-window-2" ? 2 : null;
-  if (!windowNumber) return null;
-  const windowItem = windows.find((item) => item.windowNumber === windowNumber);
+  const windowItem = resolveAuthorizedWindow(profile, uid, centerId, windows);
   return windowItem?.windowId === requestedWindowId ? windowItem.windowId : null;
 };
 
@@ -831,12 +850,7 @@ export const authorizePriorityWindow = (
   centerId: string,
   windows: CenterWindow[],
 ) => {
-  if (!profile || profile.uid !== uid || profile.enabled !== true) return null;
-  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) return null;
-  const windowNumber = profile.role === "operator-window-1" ? 1 :
-    profile.role === "operator-window-2" ? 2 : null;
-  if (!windowNumber) return null;
-  const windowItem = windows.find((item) => item.windowNumber === windowNumber && item.enabled === true);
+  const windowItem = resolveAuthorizedWindow(profile, uid, centerId, windows);
   return windowItem && windowItem.windowId && /^V[1-9]\d*$/.test(windowItem.publicCodePrefix) &&
     serviceTypes.includes(windowItem.serviceType) && typeof windowItem.serviceLabel === "string" &&
     ["enhanced", "standard"].includes(windowItem.validationLevel) ? windowItem : null;
@@ -848,15 +862,8 @@ export const authorizeDocumentationWindow = (
   centerId: string,
   windows: CenterWindow[],
 ) => {
-  if (!profile || profile.uid !== uid || profile.enabled !== true) return null;
-  if (!profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true) return null;
-  if (profile.role !== "operator-window-1" && profile.role !== "operator-window-2") return null;
-  const explicitWindowId = typeof profile.windowId === "string" && profile.windowId ? profile.windowId : null;
-  const legacyWindowNumber = profile.role === "operator-window-1" ? 1 : 2;
-  const windowItem = explicitWindowId
-    ? windows.find((item) => item.windowId === explicitWindowId)
-    : windows.find((item) => item.windowNumber === legacyWindowNumber);
-  return windowItem?.enabled === true && windowItem.windowId &&
+  const windowItem = resolveAuthorizedWindow(profile, uid, centerId, windows);
+  return windowItem?.windowId &&
     serviceTypes.includes(windowItem.serviceType) && typeof windowItem.serviceLabel === "string" &&
     ["enhanced", "standard"].includes(windowItem.validationLevel) ? windowItem : null;
 };
@@ -2991,8 +2998,20 @@ export const hydrateOperationalDayView = onCall(
       !["admin", "operator-window-1", "operator-window-2", "cashier"].includes(profile.role)) {
       return { ok: false, outcome: "unauthorized" as const };
     }
+    const center = centerSnapshot.val() as CenterConfig;
+    if ((profile.role === "operator-window-1" || profile.role === "operator-window-2") &&
+      !resolveAuthorizedWindow(profile, request.auth.uid, centerId, valuesOf(center.windows))) {
+      return { ok: false, outcome: "unauthorized" as const };
+    }
+    if (profile.role === "cashier") {
+      const cashierId = typeof profile.cashierId === "string" && profile.cashierId ? profile.cashierId : null;
+      const cashier = cashierId
+        ? valuesOf<CenterCashier>(center.cashiers).find((item) => item.cashierId === cashierId)
+        : null;
+      if (!cashier || cashier.enabled !== true) return { ok: false, outcome: "unauthorized" as const };
+    }
     if (!daySnapshot.exists()) return { ok: true, outcome: "empty" as const };
-    await writeOperationalViews(database, centerId, dayId, daySnapshot.val(), centerSnapshot.val(), Date.now());
+    await writeOperationalViews(database, centerId, dayId, daySnapshot.val(), center, Date.now());
     return { ok: true, outcome: "ready" as const };
   },
 );
