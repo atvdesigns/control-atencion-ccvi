@@ -20,6 +20,7 @@ vm.runInNewContext(code, {
   require(name) {
     if (name === "firebase-admin/app") return { initializeApp() {} };
     if (name === "firebase-admin/database") return { getDatabase() { throw new Error("DATABASE_NOT_ALLOWED_IN_UNIT_TEST"); } };
+    if (name === "firebase-functions/v2/database") return { onValueWritten: (_options, handler) => handler };
     if (name === "firebase-functions/v2/https") return { HttpsError, onCall: (_options, handler) => handler };
     if (name === "node:crypto") return require(name);
     throw new Error(`Unexpected dependency: ${name}`);

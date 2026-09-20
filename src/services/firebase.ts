@@ -621,15 +621,40 @@ export interface OperationalDaySnapshot {
   events?: unknown;
 }
 
+export type OperationalDayReadScope =
+  | { role: "admin" }
+  | { role: "window"; windowId: string }
+  | { role: "cashier"; cashierId: string };
+
+export const hydrateOperationalDayViewCallable = async (centerId: string, dayId: string) => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<
+    { centerId: string; dayId: string },
+    { ok: boolean; outcome: "ready" | "empty" | "unauthenticated" | "unauthorized" | "invalid_request" }
+  >(functions, "hydrateOperationalDayView");
+  const result = await callable({ centerId, dayId });
+  return result.data;
+};
+
 export const subscribeToOperationalDay = (
   centerId: string,
   dayId: string,
+  scope: OperationalDayReadScope,
   onSnapshot: (snapshot: OperationalDaySnapshot) => void,
 ): Unsubscribe => {
   if (!database || !centerId || !dayId) return () => undefined;
 
-  return onValue(ref(database, `days/${centerId}/${dayId}`), (snapshot) => {
-    if (!snapshot.exists()) return;
+  const path = scope.role === "admin"
+    ? `days/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}`
+    : scope.role === "window"
+      ? `operationalViews/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}/windows/${publicPathSegment(scope.windowId)}`
+      : `operationalViews/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}/cashiers/${publicPathSegment(scope.cashierId)}`;
+
+  return onValue(ref(database, path), (snapshot) => {
+    if (!snapshot.exists()) {
+      onSnapshot({ cases: {}, paymentQueue: {}, events: {} });
+      return;
+    }
 
     const value = snapshot.val() as OperationalDaySnapshot | null;
     if (!value || typeof value !== "object") return;

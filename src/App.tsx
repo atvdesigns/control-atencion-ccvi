@@ -101,6 +101,8 @@ import {
   isCenterOpenForTickets,
   getPublicStatusUrl,
   loadData,
+  clearPrivateOperationalCache,
+  clearPrivateOperationalState,
   markWindowNoShowRealtime,
   markCaseAsPriorityRealtime,
   createPriorityArrivalRealtime,
@@ -139,6 +141,7 @@ import {
   createKioskArrivalCallable,
   hasFirebaseConfig,
   getCenterConfigRealtime,
+  hydrateOperationalDayViewCallable,
   removeCenterConfigRealtime,
   observeAuthSession,
   signInWithUsername,
@@ -5347,6 +5350,8 @@ const App = () => {
 
   useEffect(() => observeAuthSession((nextAuthSession) => {
     invalidateOperationalAuthority(operationalExecutionContextRef);
+    setRemoteOperationalDay(null);
+    setDataState((current) => clearPrivateOperationalState(current));
     setAuthSession(nextAuthSession);
   }), []);
 
@@ -5363,6 +5368,15 @@ const App = () => {
     setRoleState(nextRole);
     window.localStorage.setItem("ccvi-role", nextRole);
     setSnackbar(`Vista cambiada a ${roleLabels[nextRole]}`);
+  };
+
+  const handleLogout = () => {
+    invalidateOperationalAuthority(operationalExecutionContextRef);
+    clearPrivateOperationalCache();
+    setRemoteOperationalDay(null);
+    setDataState((current) => clearPrivateOperationalState(current));
+    setAuthSession({ status: "loading", user: null, profile: null });
+    void signOutCurrentUser();
   };
 
   useEffect(() => {
@@ -5481,11 +5495,25 @@ const App = () => {
     setRemoteOperationalDay(null);
     if (!selectedDayId) return;
     if (authenticatedProfile && !hasAuthorizedCenter) return;
+    if (!authenticatedProfile) return;
+
+    const scope = authenticatedProfile.role === "admin"
+      ? { role: "admin" as const }
+      : authenticatedProfile.role === "cashier" && authenticatedProfile.cashierId
+        ? { role: "cashier" as const, cashierId: authenticatedProfile.cashierId }
+        : (authenticatedProfile.role === "operator-window-1" || authenticatedProfile.role === "operator-window-2") && authenticatedProfile.windowId
+          ? { role: "window" as const, windowId: authenticatedProfile.windowId }
+          : null;
+    if (!scope) return;
 
     let active = true;
+    if (scope.role !== "admin") {
+      void hydrateOperationalDayViewCallable(selectedCenterId, selectedDayId).catch(() => undefined);
+    }
     const unsubscribe = subscribeToOperationalDay(
       selectedCenterId,
       selectedDayId,
+      scope,
       (snapshot) => {
         if (active) setRemoteOperationalDay({ centerId: selectedCenterId, dayId: selectedDayId, snapshot });
       },
@@ -5520,7 +5548,7 @@ const App = () => {
           <Stack spacing={3}>
           <Typography variant="h4" component="h1" color="primary" textAlign="center">Acceso no autorizado</Typography>
           <Typography>Su cuenta no tiene un perfil habilitado para acceder.</Typography>
-          <Button variant="contained" onClick={() => void signOutCurrentUser()}>Cerrar sesión</Button>
+          <Button variant="contained" onClick={handleLogout}>Cerrar sesión</Button>
           </Stack>
         </LoginShell>
       );
@@ -5638,10 +5666,7 @@ const App = () => {
 
   return (
     <>
-      <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? () => {
-        invalidateOperationalAuthority(operationalExecutionContextRef);
-        void signOutCurrentUser();
-      } : undefined} />
+      <Header role={effectiveRole} data={privateData} setRole={setRole} setData={setData} allowedCenterIds={authenticatedProfile?.centerIds} onLogout={authenticatedProfile ? handleLogout : undefined} />
       {effectiveRole === "kiosk" && <KioskView centerId={data.selectedCenterId} />}
       {effectiveRole.startsWith("operator") && activeOperatorWindow && (
         <OperatorView

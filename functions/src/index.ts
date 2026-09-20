@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase-admin/app";
 import { getDatabase } from "firebase-admin/database";
 import { randomUUID } from "node:crypto";
+import { onValueWritten } from "firebase-functions/v2/database";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 initializeApp();
@@ -95,6 +96,92 @@ interface WindowDay {
   events?: Record<string, unknown>;
   [key: string]: unknown;
 }
+
+type OperationalProjection = {
+  metadata: Record<string, unknown>;
+  cases: Record<string, Record<string, unknown>>;
+  paymentQueue: Record<string, Record<string, unknown>>;
+  events: Record<string, never>;
+};
+
+const allowlistedRecord = (value: Record<string, unknown>, fields: readonly string[]) =>
+  Object.fromEntries(fields.flatMap((field) => value[field] === undefined ? [] : [[field, value[field]]]));
+
+export const windowOperationalCaseFields = [
+  "caseId", "centerId", "sessionId", "publicCode", "globalArrivalSequence", "publicSequence",
+  "serviceType", "serviceLabel", "validationLevel", "personKind", "assignedWindowId",
+  "assignedWindowNumber", "isPriority", "priorityType", "currentState", "arrivalAt",
+  "calledToWindowAt", "documentValidationStartedAt", "documentValidationCompletedAt",
+  "documentationWaitingSince", "documentStatus", "folderCode", "paymentQueueNumber",
+  "paymentTicketId", "cashierId", "calledToCashierAt", "cashierStartedAt", "paymentCompletedAt",
+  "completedAt", "operationalReassignmentQueuedAt", "updatedAt",
+] as const;
+
+export const cashierOperationalCaseFields = [
+  "caseId", "centerId", "sessionId", "publicCode", "serviceType", "serviceLabel",
+  "assignedWindowId", "assignedWindowNumber", "isPriority", "currentState", "arrivalAt",
+  "documentValidationCompletedAt", "folderCode", "paymentQueueNumber", "paymentTicketId",
+  "cashierId", "calledToCashierAt", "cashierStartedAt", "paymentCompletedAt", "completedAt", "updatedAt",
+] as const;
+
+export const operationalPaymentQueueFields = [
+  "queueItemId", "centerId", "sessionId", "caseId", "publicCode", "folderCode", "queueNumber",
+  "approvedAt", "state", "cashierId", "reservedAt", "calledAt", "startedAt", "completedAt", "updatedAt",
+] as const;
+
+const operationalMetadata = (day: Record<string, unknown>) => {
+  const metadata = recordOf(day.metadata);
+  return allowlistedRecord(metadata, ["sessionId", "centerId", "date", "status"]);
+};
+
+export const buildOperationalViews = (
+  dayValue: unknown,
+  centerValue: unknown,
+) => {
+  const day = recordOf(dayValue);
+  const center = recordOf(centerValue);
+  const cases = recordOf<Record<string, unknown>>(day.cases);
+  const paymentQueue = recordOf<Record<string, unknown>>(day.paymentQueue);
+  const windows = valuesOf<CenterWindow>(
+    center.windows as CenterWindow[] | Record<string, CenterWindow> | undefined,
+  );
+  const cashiers = valuesOf<CenterCashier>(
+    center.cashiers as CenterCashier[] | Record<string, CenterCashier> | undefined,
+  );
+  const metadata = operationalMetadata(day);
+  const emptyView = (): OperationalProjection => ({ metadata, cases: {}, paymentQueue: {}, events: {} });
+  const windowViews = Object.fromEntries(windows.map((windowItem) => [windowItem.windowId, emptyView()]));
+  const cashierViews = Object.fromEntries(cashiers.map((cashier) => [cashier.cashierId, emptyView()]));
+
+  for (const [caseId, caseValue] of Object.entries(cases)) {
+    const windowId = typeof caseValue.assignedWindowId === "string" ? caseValue.assignedWindowId : null;
+    if (windowId && windowViews[windowId]) {
+      windowViews[windowId].cases[caseId] = allowlistedRecord(caseValue, windowOperationalCaseFields);
+    }
+  }
+
+  for (const [queueItemId, queueValue] of Object.entries(paymentQueue)) {
+    const caseId = typeof queueValue.caseId === "string" ? queueValue.caseId : null;
+    const caseValue = caseId ? cases[caseId] : null;
+    if (!caseId || !caseValue) continue;
+    const state = queueValue.state;
+    const assignedCashierId = typeof queueValue.cashierId === "string" ? queueValue.cashierId : null;
+    const targetCashiers = state === "waiting_cashier"
+      ? Object.keys(cashierViews)
+      : assignedCashierId && cashierViews[assignedCashierId] ? [assignedCashierId] : [];
+    for (const cashierId of targetCashiers) {
+      cashierViews[cashierId].paymentQueue[queueItemId] =
+        allowlistedRecord(queueValue, operationalPaymentQueueFields);
+      const sanitizedCase = allowlistedRecord(caseValue, cashierOperationalCaseFields);
+      if (state === "paused" && typeof caseValue.optionalInternalNote === "string" && caseValue.optionalInternalNote) {
+        sanitizedCase.optionalInternalNote = caseValue.optionalInternalNote;
+      }
+      cashierViews[cashierId].cases[caseId] = sanitizedCase;
+    }
+  }
+
+  return { windows: windowViews, cashiers: cashierViews };
+};
 
 interface CallNextWindowContext {
   centerId: string;
@@ -2833,4 +2920,79 @@ export const markCashierCaseNoShow = onCall(
 export const completeCashierPayment = onCall(
   { region: "us-central1", enforceAppCheck: false },
   async (request) => executeCashierFollowupCallable(request, "complete"),
+);
+
+const writeOperationalViews = async (
+  database: ReturnType<typeof getDatabase>,
+  centerId: string,
+  dayId: string,
+  dayValue: unknown,
+  centerValue: unknown,
+  sourceVersion: number,
+) => {
+  const projection = buildOperationalViews(dayValue, centerValue);
+  await database.ref(`operationalViews/${centerId}/${dayId}`).transaction((current) => {
+    const currentVersion = Number(recordOf(current)._sourceVersion ?? 0);
+    if (currentVersion > sourceVersion) return undefined;
+    return { ...projection, _sourceVersion: sourceVersion };
+  }, undefined, false);
+};
+
+export const syncOperationalDayViews = onValueWritten(
+  { ref: "/days/{centerId}/{dayId}", region: "us-central1" },
+  async (event) => {
+    const { centerId, dayId } = event.params;
+    const database = getDatabase();
+    if (!event.data.after.exists()) {
+      await database.ref(`operationalViews/${centerId}/${dayId}`).remove();
+      return;
+    }
+    const centerSnapshot = await database.ref(`centers/${centerId}`).get();
+    if (!centerSnapshot.exists()) {
+      await database.ref(`operationalViews/${centerId}/${dayId}`).remove();
+      return;
+    }
+    const eventVersion = Date.parse(event.time);
+    await writeOperationalViews(
+      database,
+      centerId,
+      dayId,
+      event.data.after.val(),
+      centerSnapshot.val(),
+      Number.isFinite(eventVersion) ? eventVersion : Date.now(),
+    );
+  },
+);
+
+export const hydrateOperationalDayView = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    if (!request.auth?.uid) return { ok: false, outcome: "unauthenticated" as const };
+    const input = request.data as Record<string, unknown> | null;
+    if (!input || Array.isArray(input) || Object.keys(input).length !== 2 ||
+      typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
+      typeof input.dayId !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(input.dayId)) {
+      return { ok: false, outcome: "invalid_request" as const };
+    }
+    const centerId = input.centerId;
+    const dayId = input.dayId;
+    const database = getDatabase();
+    const [profileSnapshot, centerSnapshot, daySnapshot] = await Promise.all([
+      database.ref(`users/${request.auth.uid}`).get(),
+      database.ref(`centers/${centerId}`).get(),
+      database.ref(`days/${centerId}/${dayId}`).get(),
+    ]);
+    if (!profileSnapshot.exists() || !centerSnapshot.exists()) {
+      return { ok: false, outcome: "unauthorized" as const };
+    }
+    const profile = profileSnapshot.val() as UserProfile;
+    if (profile.uid !== request.auth.uid || profile.enabled !== true ||
+      !profile.centerIds?.includes(centerId) || profile.centerAccess?.[centerId] !== true ||
+      !["admin", "operator-window-1", "operator-window-2", "cashier"].includes(profile.role)) {
+      return { ok: false, outcome: "unauthorized" as const };
+    }
+    if (!daySnapshot.exists()) return { ok: true, outcome: "empty" as const };
+    await writeOperationalViews(database, centerId, dayId, daySnapshot.val(), centerSnapshot.val(), Date.now());
+    return { ok: true, outcome: "ready" as const };
+  },
 );

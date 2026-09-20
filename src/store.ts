@@ -476,15 +476,41 @@ export const loadData = (): AppData => {
   if (!raw) return createInitialData();
 
   try {
-    return ensureSession(normalizeData(JSON.parse(raw) as AppData));
+    const loaded = normalizeData(JSON.parse(raw) as AppData);
+    return ensureSession({ ...loaded, sessions: {}, cases: {}, paymentQueue: {}, events: [] });
   } catch {
     return createInitialData();
   }
 };
 
 export const saveData = (data: AppData) => {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  const safeCenters = Object.fromEntries(Object.entries(data.centers).map(([centerId, center]) => [
+    centerId,
+    {
+      ...center,
+      cashierCommissionRate: undefined,
+      cashiers: center.cashiers.map(({ cashierName: _cashierName, ...cashier }) => cashier),
+    },
+  ]));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    selectedCenterId: data.selectedCenterId,
+    centers: safeCenters,
+    sessions: {},
+    cases: {},
+    paymentQueue: {},
+    events: [],
+  }));
 };
+
+export const clearPrivateOperationalCache = () => window.localStorage.removeItem(STORAGE_KEY);
+
+export const clearPrivateOperationalState = (data: AppData): AppData => ({
+  ...data,
+  sessions: {},
+  cases: {},
+  paymentQueue: {},
+  events: [],
+});
 
 export const event = (
   data: AppData,
