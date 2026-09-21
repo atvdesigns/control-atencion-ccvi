@@ -25,6 +25,8 @@ import {
   QrCode2,
   Refresh,
   Storefront,
+  Visibility,
+  VisibilityOff,
   WarningAmber,
 } from "@mui/icons-material";
 import {
@@ -49,6 +51,8 @@ import {
   FormLabel,
   Grid,
   Grid2,
+  IconButton,
+  InputAdornment,
   LinearProgress,
   MenuItem,
   Paper,
@@ -5326,6 +5330,7 @@ const App = () => {
   });
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [centerConfigHydration, setCenterConfigHydration] =
@@ -5603,7 +5608,33 @@ const App = () => {
             <Typography color="text.secondary">Acceda con sus credenciales para continuar.</Typography>
           </Stack>
           <TextField label="Usuario" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required disabled={isSigningIn} />
-          <TextField label="Contraseña" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required disabled={isSigningIn} />
+          <TextField
+            label="Contraseña"
+            type={showPassword ? "text" : "password"}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
+            required
+            disabled={isSigningIn}
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      type="button"
+                      aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                      onClick={() => setShowPassword((visible) => !visible)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      disabled={isSigningIn}
+                      sx={{ width: 48, height: 48, color: "primary.main" }}
+                    >
+                      {showPassword ? <VisibilityOff /> : <Visibility />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              },
+            }}
+          />
           {loginError && <Alert severity="error">{loginError}</Alert>}
           <Box sx={{ display: "flex", justifyContent: "center", pt: 1 }}>
             <Button
