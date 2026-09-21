@@ -6,46 +6,60 @@ import type {
 } from "./types";
 
 const DEFAULT_REQUIREMENTS: DocumentaryRequirementsByService = {
-  representation: [
+  "representation": [
     {
-      requirementId: "representation-company-statutes",
-      label: "Estatutos de la empresa.",
-      enabled: true,
+      "requirementId": "representation-valid-powers",
+      "label": "Poder notarial vigente y/o Certificado de Vigencia de Poderes con máximo 60 días de antigüedad.",
+      "enabled": true
     },
     {
-      requirementId: "representation-valid-powers",
-      label: "Certificado de vigencia de poderes.",
-      enabled: true,
+      "requirementId": "representation-legal-representative-identity",
+      "label": "Cédula de Identidad vigente.",
+      "enabled": true
     },
     {
-      requirementId: "representation-legal-representative-identity",
-      label: "Cédula de identidad del representante legal.",
-      enabled: true,
+      "requirementId": "representation-return-order",
+      "label": "Oficio de devolución (Orden de liberación).",
+      "enabled": true
     },
     {
-      requirementId: "representation-current-annotations",
-      label: "Certificado de anotaciones vigentes o padrón.",
-      enabled: true,
+      "requirementId": "representation-current-annotations",
+      "label": "Certificado de Anotaciones Vigentes (CAV) del vehículo, con una antigüedad máxima de 30 días desde su fecha de emisión.",
+      "enabled": true
     },
+    {
+      "requirementId": "representation-company-statutes",
+      "label": "Copia de la Escritura de Constitución de la sociedad.",
+      "enabled": true
+    },
+    {
+      "requirementId": "representation-vehicle-documents",
+      "label": "Permiso de circulación, SOAP y Revisión Técnica.",
+      "enabled": true
+    }
   ],
-  vehicle_owner: [
+  "vehicle_owner": [
     {
-      requirementId: "owner-return-order",
-      label: "Orden de devolución del Juzgado de Policía Local.",
-      enabled: true,
+      "requirementId": "owner-return-order",
+      "label": "Oficio de Devolución (Orden de liberación) del Juzgado de Policía Local.",
+      "enabled": true
     },
     {
-      requirementId: "owner-current-identity",
-      label: "Cédula de identidad vigente.",
-      enabled: true,
+      "requirementId": "owner-current-identity",
+      "label": "Cédula de Identidad vigente.",
+      "enabled": true
     },
     {
-      requirementId: "owner-current-annotations",
-      label:
-        "Certificado de anotaciones vigentes o padrón emitido hace no más de 30 días.",
-      enabled: true,
+      "requirementId": "owner-current-annotations",
+      "label": "Certificado de Anotaciones Vigentes o padrón emitido no más de 30 días.",
+      "enabled": true
     },
-  ],
+    {
+      "requirementId": "owner-vehicle-documents",
+      "label": "Permiso de circulación, SOAP y Revisión Técnica.",
+      "enabled": true
+    }
+  ]
 };
 
 const DEFAULT_PAYMENT_METHODS: PaymentMethodConfig[] = [

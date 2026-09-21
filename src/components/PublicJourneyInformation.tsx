@@ -48,7 +48,7 @@ export const PublicJourneyInformation = ({
       {showRequirements && (
         <Box component="section" aria-labelledby="public-requirements-title" sx={{ flex: 1 }}>
           <Typography variant="h6" fontWeight={800}>
-            <span id="public-requirements-title">Documentación que debe preparar</span>
+            <span id="public-requirements-title">Documentos obligatorios que se solicitan:</span>
           </Typography>
           <Typography color="text.secondary" mt={0.5}>
             Mantenga estos documentos disponibles antes de que llamen su número.
