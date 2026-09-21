@@ -3606,7 +3606,8 @@ const PaymentIssueDialog = ({
 };
 
 const DisplayView = ({ data }: { data: AppData }) => {
-  const dayId = getCurrentSession(data)?.date;
+  const center = data.centers[data.selectedCenterId];
+  const dayId = useOperationalDay(center.timezone, true);
   const [events, setEvents] = useState<PublicDisplayCallEvent[]>([]);
   const [activeEntries, setActiveEntries] = useState<PublicDisplayEntry[]>([]);
   const [currentCall, setCurrentCall] = useState<PublicDisplayCallEvent | null>(null);

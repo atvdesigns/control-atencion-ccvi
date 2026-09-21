@@ -81,7 +81,7 @@ function fixture() {
     },
   });
   const initial = store.createInitialData();
-  const profile = { role: "cashier" };
+  const profile = { role: "cashier", cashierId: "cashier1" };
   let currentData = initial;
   let lastSubscriptionDeps;
   let subscriptionCleanup;
@@ -104,7 +104,10 @@ function fixture() {
       selectedCenterId: currentData.selectedCenterId,
       authenticatedProfile: profile, hasAuthorizedCenter: true,
       setRemoteOperationalDay(value) { remote = value; },
-      subscribeToOperationalDay(center, day, callback) {
+      hydrateOperationalDayViewCallable() { return Promise.resolve({ ok: true, outcome: "ready" }); },
+      subscribeToOperationalDay(center, day, scope, callback) {
+        assert.equal(scope.role, "cashier");
+        assert.equal(scope.cashierId, "cashier1");
         calls.push(`${center}/${day}`); callbacks.push(callback);
         return () => stopped.push(day);
       },
