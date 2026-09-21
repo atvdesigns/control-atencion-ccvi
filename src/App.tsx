@@ -2461,15 +2461,25 @@ const OperatorView = ({
       <Dialog
         open={Boolean(priorityDialogCase) || priorityCreationOpen}
         onClose={createdPriorityCase ? undefined : closePriorityDialog}
+        aria-labelledby={priorityDialogCase && !createdPriorityCase ? "priority-edit-title" : undefined}
         fullWidth
-        maxWidth="sm"
+        maxWidth={priorityDialogCase ? "md" : "sm"}
         slotProps={{
           backdrop: { sx: modalBackdropSx },
           paper: {
-            sx: { ...modalPaperSx, position: "relative" },
+            sx: { ...(priorityDialogCase ? modalWindowPaperSx : modalPaperSx), position: "relative" },
           },
         }}
       >
+        {priorityDialogCase && !createdPriorityCase ? (
+          <DialogTitle sx={{ p: 0 }}>
+            <WindowDialogHeader
+              id="priority-edit-title"
+              title={priorityDialogCase.isPriority ? "Atención preferencial" : "Crear atención preferencial"}
+              supportingText="Seleccione el motivo de la atención preferencial."
+            />
+          </DialogTitle>
+        ) : (
         <DialogTitle
           sx={
             createdPriorityCase
@@ -2504,6 +2514,7 @@ const OperatorView = ({
               : "Crear atención preferencial"}
           </Typography>
         </DialogTitle>
+        )}
         <DialogContent
           sx={
             createdPriorityCase
@@ -2574,8 +2585,8 @@ const OperatorView = ({
           ) : (
             <>
           {priorityDialogCase?.isPriority && priorityDialogCase.priorityType && (
-            <Stack spacing={0.75} sx={{ mt: 1, mb: 2 }}>
-              <Typography>Este turno está registrado como atención preferencial.</Typography>
+            <Stack spacing={0.75} sx={{ mt: 1, mb: 2, p: 2, bgcolor: "background.default", borderRadius: 2 }}>
+              <Typography fontWeight={600}>Atención preferencial registrada</Typography>
               <Typography color="text.secondary">
                 Motivo actual: {priorityTypeLabels[priorityDialogCase.priorityType]}.
               </Typography>
@@ -2609,7 +2620,14 @@ const OperatorView = ({
           )}
         </DialogContent>
         <DialogActions
-          sx={{ ...modalActionsSx, justifyContent: createdPriorityCase ? "center" : "flex-end" }}
+          sx={{
+            ...modalActionsSx,
+            justifyContent: priorityDialogCase || createdPriorityCase ? "center" : "flex-end",
+            ...(priorityDialogCase ? {
+              flexWrap: "nowrap",
+              "& .MuiButton-root": { px: { xs: 2, sm: 2 }, minWidth: { xs: "100%", sm: "auto" } },
+            } : {}),
+          }}
         >
           {createdPriorityCase ? (
             <Button
@@ -2633,12 +2651,12 @@ const OperatorView = ({
                 closePriorityDialog();
               }}
             >
-              Quitar atención preferencial
+              Quitar preferencial
             </Button>
           )}
           <Button
             variant="contained"
-            color="secondary"
+            color={priorityDialogCase ? "primary" : "secondary"}
             sx={modalPrimaryActionSx}
             disabled={
               isCreatingPriority ||
@@ -2815,14 +2833,18 @@ const OperatorView = ({
         open={Boolean(priorityRemovalCase)}
         onClose={() => setPriorityRemovalCase(null)}
         fullWidth
-        maxWidth="sm"
-        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalPaperSx } }}
+        maxWidth="md"
+        aria-labelledby="priority-removal-title"
+        slotProps={{ backdrop: { sx: modalBackdropSx }, paper: { sx: modalWindowPaperSx } }}
       >
-        <DialogTitle sx={modalTitleSx}>Quitar atención preferencial</DialogTitle>
-        <DialogContent sx={modalContentSx}>
-          <Typography>Este turno volverá a tratarse como una atención regular.</Typography>
-        </DialogContent>
-        <DialogActions sx={modalActionsSx}>
+        <DialogTitle sx={{ p: 0 }}>
+          <WindowDialogHeader
+            id="priority-removal-title"
+            title="Quitar preferencial"
+            supportingText="Este turno volverá a tratarse como una atención regular."
+          />
+        </DialogTitle>
+        <DialogActions sx={{ ...modalActionsSx, justifyContent: "center", flexWrap: "nowrap" }}>
           <Button onClick={() => setPriorityRemovalCase(null)} sx={modalTertiaryActionSx}>Cancelar</Button>
           <Button
             color="error"
@@ -2844,7 +2866,7 @@ const OperatorView = ({
               }
             }}
           >
-            Quitar atención preferencial
+            Quitar preferencial
           </Button>
         </DialogActions>
       </Dialog>
