@@ -24,17 +24,12 @@ const DEFAULT_REQUIREMENTS: DocumentaryRequirementsByService = {
     },
     {
       "requirementId": "representation-current-annotations",
-      "label": "Certificado de Anotaciones Vigentes (CAV) del vehículo, con una antigüedad máxima de 30 días desde su fecha de emisión.",
+      "label": "Certificado de Anotaciones Vigentes (CAV) o padrón del vehículo, con una antigüedad no mayor de 30 días desde su fecha de emisión.",
       "enabled": true
     },
     {
       "requirementId": "representation-company-statutes",
       "label": "Copia de la Escritura de Constitución de la sociedad.",
-      "enabled": true
-    },
-    {
-      "requirementId": "representation-vehicle-documents",
-      "label": "Permiso de circulación, SOAP y Revisión Técnica.",
       "enabled": true
     }
   ],
@@ -51,12 +46,7 @@ const DEFAULT_REQUIREMENTS: DocumentaryRequirementsByService = {
     },
     {
       "requirementId": "owner-current-annotations",
-      "label": "Certificado de Anotaciones Vigentes o padrón emitido no más de 30 días.",
-      "enabled": true
-    },
-    {
-      "requirementId": "owner-vehicle-documents",
-      "label": "Permiso de circulación, SOAP y Revisión Técnica.",
+      "label": "Certificado de Anotaciones Vigentes (CAV) o padrón del vehículo, con una antigüedad no mayor de 30 días desde su fecha de emisión.",
       "enabled": true
     }
   ]
