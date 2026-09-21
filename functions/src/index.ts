@@ -2413,6 +2413,7 @@ const createDocumentationWaitCallable = (operation: DocumentationWaitOperation) 
               status: "Atención en ventanilla", destination: `Ventanilla ${caseRecord.assignedWindowNumber}`,
               updatedAt: caseRecord.updatedAt,
             },
+            ...(waiting ? { [`public/displays/${centerId}/${dayId}/${caseId}`]: null } : {}),
           });
         },
         (committed) => { committedHolder.value = committed; },

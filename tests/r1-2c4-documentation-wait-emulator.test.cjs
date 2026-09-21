@@ -126,6 +126,48 @@ test("actual callables preserve legacy W1 W2 and authorize dynamic W3 after clos
   } finally { await db.ref(`centers/${centerId}`).remove(); for (const [uid] of users) { await db.ref(`users/${uid}`).remove(); await db.ref(`public/turns/${uid}-token-${process.pid}`).remove(); } await db.ref(`days/${centerId}`).remove(); await db.ref(`public/displays/${centerId}`).remove(); }
 });
 
+test("Pause clears both active Window projection paths and preserves unrelated public state", async () => {
+  const db = getDatabase(); const centerId = `projection-c4-${process.pid}`; const uid = `projection-user-${process.pid}`;
+  const date = dateId(); const sessionId = `${centerId}-${date}`;
+  const source = item("case-pause", { centerId, sessionId, publicToken: `pause-token-${process.pid}`, publicCode: "V1-91" });
+  const rootProjection = `public/displays/${centerId}/${date}/${source.caseId}`;
+  const compatibilityProjection = `public/displays/${centerId}/${date}/cases/${source.caseId}`;
+  const unrelatedWindowProjection = `public/displays/${centerId}/${date}/other-window`;
+  const unrelatedCashierProjection = `public/displays/${centerId}/${date}/other-cashier`;
+  const displayCall = `public/displayCalls/${centerId}/${date}/historical-call`;
+  try {
+    await seedAuthority(db, centerId, uid, "operator-window-1", "w1");
+    await db.ref(`days/${centerId}/${date}`).set(day(source));
+    const activeWindow = { publicCode: source.publicCode, isPriority: source.isPriority, status: "Atención en ventanilla", destination: "Ventanilla 1", updatedAt: source.updatedAt };
+    const otherWindow = { publicCode: "V2-90", isPriority: false, status: "Diríjase a Ventanilla 2", destination: "Ventanilla 2", updatedAt: 8 };
+    const cashier = { publicCode: "V1-80", isPriority: false, status: "Atención en caja", destination: "Caja 1", updatedAt: 9 };
+    const historicalCall = { publicCode: source.publicCode, isPriority: source.isPriority, destinationType: "window", destinationLabel: "Ventanilla 1", calledAt: 5 };
+    await db.ref().update({ [rootProjection]: activeWindow, [compatibilityProjection]: activeWindow, [unrelatedWindowProjection]: otherWindow, [unrelatedCashierProjection]: cashier, [displayCall]: historicalCall });
+
+    const paused = await pauseWindowForDocumentation.run({ data: { centerId, caseId: source.caseId }, auth: { uid, token: {} }, rawRequest: {} });
+    assert.equal(paused.outcome, "documentation_wait_started");
+    assert.equal((await db.ref(rootProjection).get()).exists(), false);
+    assert.equal((await db.ref(compatibilityProjection).get()).exists(), false);
+    assert.deepEqual((await db.ref(unrelatedWindowProjection).get()).val(), otherWindow);
+    assert.deepEqual((await db.ref(unrelatedCashierProjection).get()).val(), cashier);
+    assert.deepEqual((await db.ref(displayCall).get()).val(), historicalCall);
+    const persisted = (await db.ref(`days/${centerId}/${date}/cases/${source.caseId}`).get()).val();
+    assert.equal(persisted.currentState, "waiting_documentation");
+    assert.equal(typeof persisted.documentationWaitingSince, "number");
+    assert.equal(persisted.publicCode, source.publicCode);
+    assert.equal(persisted.isPriority, source.isPriority);
+
+    const resumed = await resumeWindowDocumentation.run({ data: { centerId, caseId: source.caseId }, auth: { uid, token: {} }, rawRequest: {} });
+    assert.equal(resumed.outcome, "documentation_wait_resumed");
+    assert.equal((await db.ref(rootProjection).get()).exists(), false);
+    assert.equal((await db.ref(`${compatibilityProjection}/publicCode`).get()).val(), source.publicCode);
+    assert.deepEqual((await db.ref(displayCall).get()).val(), historicalCall);
+  } finally {
+    await db.ref(`centers/${centerId}`).remove(); await db.ref(`users/${uid}`).remove(); await db.ref(`days/${centerId}`).remove();
+    await db.ref(`public/turns/${source.publicToken}`).remove(); await db.ref(`public/displays/${centerId}`).remove(); await db.ref(`public/displayCalls/${centerId}`).remove();
+  }
+});
+
 test("actual callable rejects cross Window center disabled profile and disabled center", async () => {
   const db = getDatabase(); const centerId = `deny-c4-${process.pid}`; const other = `other-c4-${process.pid}`; const uid = `deny-c4-user-${process.pid}`; const date = dateId(); const source = item("target", { centerId, sessionId: `${centerId}-${date}`, assignedWindowId: "w2", assignedWindowNumber: 2, assignedOperatorId: "operator-window-2", serviceType: "vehicle_owner" });
   const invoke = center => pauseWindowForDocumentation.run({ data: { centerId: center, caseId: source.caseId }, auth: { uid, token: {} }, rawRequest: {} });
