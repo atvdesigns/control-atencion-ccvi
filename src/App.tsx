@@ -143,6 +143,11 @@ import {
   type OperationalConfigStatus,
 } from "./operationalCenterConfig";
 import {
+  adminReportDataFromSnapshot,
+  sortTraceEventsNewestFirst,
+  traceEventsFromSnapshot,
+} from "./adminReporting";
+import {
   createKioskArrivalCallable,
   hasFirebaseConfig,
   getCenterConfigRealtime,
@@ -4002,10 +4007,23 @@ const AdminView = ({
     .sort((a, b) => b.date.localeCompare(a.date));
   const [selectedMetricsSessionId, setSelectedMetricsSessionId] = useState(session.sessionId);
   const previousLiveSessionId = useRef(session.sessionId);
+  const [historicalReportDay, setHistoricalReportDay] = useState<{
+    centerId: string;
+    dayId: string;
+    snapshot: OperationalDaySnapshot;
+  } | null>(null);
   const [cashierPerformancePeriod, setCashierPerformancePeriod] = useState<"today" | "week" | "month">("today");
   const [rejectedUsersPeriod, setRejectedUsersPeriod] = useState<"today" | "week" | "month" | "year">("today");
   const selectedMetricsSession = data.sessions[selectedMetricsSessionId] ?? session;
-  const metrics = calculateMetrics(data, selectedMetricsSession.sessionId);
+  const historicalSelection = selectedMetricsSession.sessionId !== session.sessionId;
+  const matchingHistoricalSnapshot = historicalReportDay?.centerId === center.centerId &&
+    historicalReportDay.dayId === selectedMetricsSession.date
+    ? historicalReportDay.snapshot
+    : null;
+  const reportData = historicalSelection
+    ? adminReportDataFromSnapshot(data, selectedMetricsSession, matchingHistoricalSnapshot ?? {})
+    : data;
+  const metrics = calculateMetrics(reportData, selectedMetricsSession.sessionId);
   const cashierPerformance = useMemo(() => {
     const now = new Date();
     const periodStart = new Date(now);
@@ -4161,6 +4179,28 @@ const AdminView = ({
     }
     previousLiveSessionId.current = session.sessionId;
   }, [availableSessions, selectedMetricsSessionId, session.sessionId]);
+
+  useEffect(() => {
+    setHistoricalReportDay(null);
+    if (!historicalSelection) return undefined;
+    let active = true;
+    const unsubscribe = subscribeToOperationalDay(
+      center.centerId,
+      selectedMetricsSession.date,
+      { role: "admin" },
+      (snapshot) => {
+        if (active) {
+          setHistoricalReportDay({ centerId: center.centerId, dayId: selectedMetricsSession.date, snapshot });
+        }
+      },
+    );
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [center.centerId, historicalSelection, selectedMetricsSession.date]);
+
+  const recentTraceEvents = sortTraceEventsNewestFirst(reportData.events).slice(0, 18);
 
   return (
     <Page
@@ -4458,7 +4498,7 @@ const AdminView = ({
               <CardContent sx={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
                 <SectionTitle icon={<Dashboard />} title="Trazabilidad reciente" />
                 <Stack spacing={1.25} sx={{ mt: 2, overflow: "auto", flex: 1, minHeight: 0, pr: { lg: 0.5 } }}>
-                  {data.events.slice(0, 18).map((traceEvent) => (
+                  {recentTraceEvents.map((traceEvent) => (
                     <Box key={traceEvent.eventId} sx={{ p: 1.5, bgcolor: "background.default", borderRadius: controlRadius }}>
                       <Typography fontWeight={800}>{formatTraceAction(traceEvent.action)}</Typography>
                       <Typography variant="body2" color="text.secondary">
@@ -4466,7 +4506,7 @@ const AdminView = ({
                       </Typography>
                     </Box>
                   ))}
-                  {data.events.length === 0 && (
+                  {recentTraceEvents.length === 0 && (
                     <EmptyState text="Aún no hay actividad registrada durante esta jornada." />
                   )}
                 </Stack>
@@ -5687,11 +5727,7 @@ const App = () => {
       typeof snapshot.paymentQueue === "object"
       ? snapshot.paymentQueue as AppData["paymentQueue"]
       : {};
-    const remoteEvents = Array.isArray(snapshot.events)
-      ? snapshot.events as AppData["events"]
-      : snapshot.events && typeof snapshot.events === "object"
-        ? Object.values(snapshot.events as Record<string, AppData["events"][number]>)
-        : [];
+    const remoteEvents = traceEventsFromSnapshot(snapshot.events);
 
     return {
       ...data,
