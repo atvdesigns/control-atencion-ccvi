@@ -173,8 +173,13 @@ export const buildOperationalViews = (
     if (!caseId || !caseValue) continue;
     const state = queueValue.state;
     const assignedCashierId = typeof queueValue.cashierId === "string" ? queueValue.cashierId : null;
+    const belongsToOperationalDay =
+      queueValue.centerId === metadata.centerId && caseValue.centerId === metadata.centerId &&
+      queueValue.sessionId === metadata.sessionId && caseValue.sessionId === metadata.sessionId;
     const targetCashiers = state === "waiting_cashier"
       ? Object.keys(cashierViews)
+      : state === "paused" && !assignedCashierId && belongsToOperationalDay
+        ? Object.keys(cashierViews)
       : assignedCashierId && cashierViews[assignedCashierId] ? [assignedCashierId] : [];
     for (const cashierId of targetCashiers) {
       cashierViews[cashierId].paymentQueue[queueItemId] =

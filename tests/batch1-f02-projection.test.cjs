@@ -31,13 +31,21 @@ const day = {
     paused: {
       caseId: "paused", centerId: "center", sessionId: "center-2026-09-19", publicCode: "V1-02",
       assignedWindowId: "window-1", assignedWindowNumber: 1, serviceType: "representation",
-      serviceLabel: "Representación", isPriority: false, priorityType: null, currentState: "paused",
-      optionalInternalNote: "cashier retry note", rejectedCustomerPhone: "+56911111111", arrivalAt: 4, updatedAt: 5,
+      serviceLabel: "Representación", isPriority: true, priorityType: "disability", currentState: "paused",
+      optionalInternalNote: "cashier retry note", rejectedCustomerName: "Private Paused Name",
+      rejectedCustomerPhone: "+56911111111", internalNotes: "unrelated private note", arrivalAt: 4, updatedAt: 5,
+    },
+    foreignPaused: {
+      caseId: "foreignPaused", centerId: "other-center", sessionId: "other-center-2026-09-19", publicCode: "V1-99",
+      assignedWindowId: "foreign-window", assignedWindowNumber: 9, serviceType: "representation",
+      serviceLabel: "Representación", isPriority: false, currentState: "paused",
+      optionalInternalNote: "foreign note", arrivalAt: 6, updatedAt: 6,
     },
   },
   paymentQueue: {
     qa: { queueItemId: "qa", caseId: "a", centerId: "center", sessionId: "center-2026-09-19", publicCode: "V1-01", folderCode: "F1", queueNumber: 1, approvedAt: 1, state: "waiting_cashier", cashierId: null, updatedAt: 2 },
-    qp: { queueItemId: "qp", caseId: "paused", centerId: "center", sessionId: "center-2026-09-19", publicCode: "V1-02", folderCode: "F2", queueNumber: 2, approvedAt: 2, state: "paused", cashierId: "cashier-1", updatedAt: 5 },
+    qp: { queueItemId: "qp", caseId: "paused", centerId: "center", sessionId: "center-2026-09-19", publicCode: "V1-02", folderCode: "F2", queueNumber: 2, approvedAt: 2, state: "paused", cashierId: null, updatedAt: 5 },
+    qf: { queueItemId: "qf", caseId: "foreignPaused", centerId: "other-center", sessionId: "other-center-2026-09-19", publicCode: "V1-99", folderCode: "FX", queueNumber: 99, approvedAt: 6, state: "paused", cashierId: null, updatedAt: 6 },
   },
   events: { secret: { actorId: "private-actor", optionalNote: "private" } },
 };
@@ -58,9 +66,11 @@ test("Window keeps operational priority reason", () => {
   assert.equal(views.windows["window-1"].cases.a.priorityType, "older_adult");
 });
 
-test("Cashiers share only unassigned FIFO queue candidates", () => {
+test("Cashiers share unassigned FIFO candidates and same-day unowned paused payments", () => {
   assert.deepEqual(Object.keys(views.cashiers["cashier-1"].paymentQueue).sort(), ["qa", "qp"]);
-  assert.deepEqual(Object.keys(views.cashiers["cashier-2"].paymentQueue), ["qa"]);
+  assert.deepEqual(Object.keys(views.cashiers["cashier-2"].paymentQueue).sort(), ["qa", "qp"]);
+  assert.equal(views.cashiers["cashier-1"].paymentQueue.qp.cashierId, null);
+  assert.equal(views.cashiers["cashier-2"].paymentQueue.qf, undefined);
 });
 
 test("Cashier receives no priority reason, rejected contact or actor data", () => {
@@ -68,9 +78,21 @@ test("Cashier receives no priority reason, rejected contact or actor data", () =
   assert.doesNotMatch(serialized, /older_adult|Private Name|Other Window|\+569|private-actor/);
 });
 
-test("Cashier receives its own pause note only", () => {
+test("Eligible Cashiers receive the approved pending-payment note and preserved identity", () => {
   assert.equal(views.cashiers["cashier-1"].cases.paused.optionalInternalNote, "cashier retry note");
-  assert.equal(views.cashiers["cashier-2"].cases.paused, undefined);
+  assert.equal(views.cashiers["cashier-2"].cases.paused.optionalInternalNote, "cashier retry note");
+  for (const cashierId of ["cashier-1", "cashier-2"]) {
+    assert.equal(views.cashiers[cashierId].cases.paused.publicCode, "V1-02");
+    assert.equal(views.cashiers[cashierId].cases.paused.isPriority, true);
+    assert.equal(views.cashiers[cashierId].paymentQueue.qp.queueItemId, "qp");
+    assert.equal(views.cashiers[cashierId].paymentQueue.qp.folderCode, "F2");
+    assert.equal(views.cashiers[cashierId].paymentQueue.qp.state, "paused");
+  }
+});
+
+test("Shared paused projection excludes private and cross-center data", () => {
+  const serialized = JSON.stringify(views.cashiers);
+  assert.doesNotMatch(serialized, /Private Paused Name|\+56911111111|disability|unrelated private note|foreign note|V1-99|FX/);
 });
 
 test("Operational projections contain no private trace events", () => {
