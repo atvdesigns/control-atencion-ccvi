@@ -1256,6 +1256,16 @@ export class PriorityMutationError extends Error {
   }
 }
 
+export class PriorityProjectionSyncError extends Error {
+  constructor(
+    public readonly outcome: "updated_projection_failed" | "removed_projection_failed",
+    public readonly committedData: AppData,
+  ) {
+    super(outcome);
+    this.name = "PriorityProjectionSyncError";
+  }
+}
+
 const mutateCasePriorityRealtime = async (
   data: AppData,
   caseId: string,
@@ -1277,7 +1287,11 @@ const mutateCasePriorityRealtime = async (
   if (!response.ok || !response.caseRecord || !response.event) {
     throw new PriorityMutationError(response.outcome);
   }
-  return mergeRealtimePriorityCase(data, response.caseRecord, response.event);
+  const committedData = mergeRealtimePriorityCase(data, response.caseRecord, response.event);
+  if (response.outcome === "updated_projection_failed" || response.outcome === "removed_projection_failed") {
+    throw new PriorityProjectionSyncError(response.outcome, committedData);
+  }
+  return committedData;
 };
 
 export const markCaseAsPriorityRealtime = async (

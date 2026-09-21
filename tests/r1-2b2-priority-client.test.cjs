@@ -32,6 +32,15 @@ test("operator receives safe feedback for rejected or failed mutations", () => {
   assert.doesNotMatch(app, /INVALID_PRIORITY_MUTATION_RESPONSE/);
 });
 
+test("committed priority projection failures preserve state and warn against blind retry", () => {
+  assert.match(store, /class PriorityProjectionSyncError/);
+  assert.match(store, /committedData/);
+  assert.match(store, /updated_projection_failed/);
+  assert.match(store, /removed_projection_failed/);
+  assert.match(app, /El cambio preferencial fue guardado, pero no pudimos actualizar la información pública/);
+  assert.match(app, /No repita la acción/);
+});
+
 test("Totem and preferential creation remain on their established callables", () => {
   assert.match(app, /createKioskArrivalCallable/);
   assert.match(store, /createPriorityArrivalCallable/);

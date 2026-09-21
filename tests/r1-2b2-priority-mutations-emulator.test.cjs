@@ -71,7 +71,43 @@ test("change and remove preserve identity and counters", async () => {
     const value = (await ref.get()).val(); assert.equal(value.cases["case-1"].isPriority, false); assert.equal(value.cases["case-1"].priorityType ?? null, null);
     assert.equal(value.cases["case-1"].publicCode, "V1-07"); assert.equal(Object.keys(value.cases).length, 1);
     assert.deepEqual(Object.values(value.events).map(item => item.action), ["priority_updated", "priority_removed"]);
+    const events = Object.values(value.events);
+    assert.deepEqual(events[0], {
+      ...events[0], previousPriorityEnabled: true, previousPriorityType: "other",
+      resultingPriorityEnabled: true, resultingPriorityType: "pregnant", workflowState: "waiting_document_validation",
+    });
+    assert.equal(events[1].previousPriorityEnabled, true);
+    assert.equal(events[1].previousPriorityType, "pregnant");
+    assert.equal(events[1].resultingPriorityEnabled, false);
+    assert.equal(events[1].resultingPriorityType ?? null, null);
+    assert.equal(events[1].workflowState, "waiting_document_validation");
   } finally { await clean([worker], ref); }
+});
+
+test("callable synchronizes public turn plus active and compatibility projections", async () => {
+  const database = getDatabase(); const centerId = `projection-center-${process.pid}`; const uid = `projection-user-${process.pid}`;
+  const date = dayId(); const rootProjection = `public/displays/${centerId}/${date}/case-1`;
+  const compatibilityProjection = `public/displays/${centerId}/${date}/cases/case-1`;
+  try {
+    await seedAuthority(database, centerId, uid);
+    await database.ref(`days/${centerId}/${date}/cases/case-1`).update({ currentState: "called_to_window", calledToWindowAt: 10 });
+    const seedProjection = { publicCode: "V1-07", isPriority: false, status: "Diríjase a Ventanilla 1", destination: "Ventanilla 1", updatedAt: 10 };
+    await database.ref(rootProjection).set(seedProjection); await database.ref(compatibilityProjection).set(seedProjection);
+    const invoke = (operation, priorityType) => updateCasePriority.run({ data: { centerId, caseId: "case-1", operation, ...(priorityType ? { priorityType } : {}) }, auth: { uid, token: {} }, rawRequest: {} });
+    assert.equal((await invoke("set", "other")).outcome, "updated");
+    assert.equal((await database.ref(`${rootProjection}/isPriority`).get()).val(), true);
+    assert.equal((await database.ref(`${compatibilityProjection}/isPriority`).get()).val(), true);
+    assert.equal((await database.ref("public/turns/public-token-1/isPriority").get()).val(), true);
+    assert.equal((await invoke("change", "pregnant")).outcome, "updated");
+    assert.equal((await invoke("remove")).outcome, "removed");
+    assert.equal((await database.ref(`${rootProjection}/isPriority`).get()).val(), false);
+    assert.equal((await database.ref(`${compatibilityProjection}/isPriority`).get()).val(), false);
+    assert.equal((await database.ref("public/turns/public-token-1/isPriority").get()).val(), false);
+  } finally {
+    await database.ref(`centers/${centerId}`).remove(); await database.ref(`users/${uid}`).remove();
+    await database.ref(`days/${centerId}`).remove(); await database.ref("public/turns/public-token-1").remove();
+    await database.ref(`public/displays/${centerId}`).remove();
+  }
 });
 
 test("missing case, wrong window and invalid state abort without writes", async () => {

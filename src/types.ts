@@ -256,6 +256,11 @@ export interface TraceEvent {
   toState: string;
   timestamp: number;
   optionalNote: string | null;
+  previousPriorityEnabled?: boolean;
+  previousPriorityType?: PriorityType | null;
+  resultingPriorityEnabled?: boolean;
+  resultingPriorityType?: PriorityType | null;
+  workflowState?: CaseState;
 }
 
 export interface AppData {

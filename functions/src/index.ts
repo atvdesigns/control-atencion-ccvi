@@ -1020,6 +1020,11 @@ export const applyExistingCasePriorityMutation = (
     caseId: context.caseId, actorRole: context.role, actorId: context.uid, action,
     fromState: current.currentState, toState: current.currentState, timestamp: context.timestamp,
     optionalNote: context.operation === "remove" ? (current.priorityType ?? null) : context.priorityType,
+    previousPriorityEnabled: current.isPriority,
+    previousPriorityType: current.priorityType ?? null,
+    resultingPriorityEnabled: nextCase.isPriority,
+    resultingPriorityType: nextCase.priorityType ?? null,
+    workflowState: current.currentState,
   };
   return {
     status: context.operation === "remove" ? "removed" as const : "updated" as const,
@@ -2091,6 +2096,10 @@ export const updateCasePriority = onCall(
         const status = current.currentState === "called_to_window" ? `Diríjase a Ventanilla ${current.assignedWindowNumber}` :
           current.currentState === "in_document_validation" ? "Atención en ventanilla" : "Prepare su documentación";
         const destination = `Ventanilla ${current.assignedWindowNumber}`;
+        const activeProjection = current.currentState === "waiting_document_validation" ? null : {
+          publicCode: current.publicCode, isPriority: current.isPriority, status, destination,
+          updatedAt: current.updatedAt,
+        };
         await database.ref().update({
           [`public/turns/${current.publicToken}`]: {
             centerId, publicCode: current.publicCode, isPriority: current.isPriority, status,
@@ -2098,11 +2107,8 @@ export const updateCasePriority = onCall(
             updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
             paymentMethods: publicPaymentMethods(center),
           },
-          [`public/displays/${centerId}/${dayId}/cases/${caseId}`]:
-            current.currentState === "waiting_document_validation" ? null : {
-              publicCode: current.publicCode, isPriority: current.isPriority, status, destination,
-              updatedAt: current.updatedAt,
-            },
+          [`public/displays/${centerId}/${dayId}/${caseId}`]: activeProjection,
+          [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: activeProjection,
         });
       } catch {
         finish(`${result.status}_projection_failed`);

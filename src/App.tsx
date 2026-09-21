@@ -115,6 +115,7 @@ import {
   markNoShowRealtime,
   pausePaymentRealtime,
   pauseWindowDocumentationRealtime,
+  PriorityProjectionSyncError,
   reassignCaseRealtime,
   resumePausedPaymentRealtime,
   resumeWindowDocumentationRealtime,
@@ -2734,8 +2735,13 @@ const OperatorView = ({
                       role,
                     );
                 setData(() => next);
-              } catch {
-                onFeedback("No pudimos actualizar la atención preferencial. Intente nuevamente.");
+              } catch (error) {
+                if (error instanceof PriorityProjectionSyncError) {
+                  setData(() => error.committedData);
+                  onFeedback("El cambio preferencial fue guardado, pero no pudimos actualizar la información pública. No repita la acción; actualice la pantalla en unos minutos.");
+                } else {
+                  onFeedback("No pudimos actualizar la atención preferencial. Intente nuevamente.");
+                }
               }
             }}
           >
@@ -2865,8 +2871,13 @@ const OperatorView = ({
                   role,
                 );
                 setData(() => next);
-              } catch {
-                onFeedback("No pudimos actualizar la atención preferencial. Intente nuevamente.");
+              } catch (error) {
+                if (error instanceof PriorityProjectionSyncError) {
+                  setData(() => error.committedData);
+                  onFeedback("El cambio preferencial fue guardado, pero no pudimos actualizar la información pública. No repita la acción; actualice la pantalla en unos minutos.");
+                } else {
+                  onFeedback("No pudimos actualizar la atención preferencial. Intente nuevamente.");
+                }
               }
             }}
           >
