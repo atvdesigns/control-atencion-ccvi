@@ -26,6 +26,7 @@ import {
   type Functions,
 } from "firebase/functions";
 import { getPublicJourneyPresentation } from "../publicJourney";
+import { publicDisplayEntriesFromSnapshot } from "../publicDisplayProjection";
 import type {
   CaseRecord,
   CenterConfig,
@@ -773,29 +774,7 @@ export const subscribeToPublicDisplay = (
         return;
       }
 
-      const entries = Object.values(snapshot.val() as Record<string, unknown>)
-        .filter((value): value is Record<string, unknown> =>
-          Boolean(value && typeof value === "object" && !Array.isArray(value)),
-        )
-        .flatMap((value) => {
-          if (
-            typeof value.publicCode !== "string" ||
-            typeof value.isPriority !== "boolean" ||
-            typeof value.status !== "string" ||
-            typeof value.destination !== "string" ||
-            typeof value.updatedAt !== "number"
-          ) {
-            return [];
-          }
-          return [{
-            publicCode: value.publicCode,
-            isPriority: value.isPriority,
-            status: value.status,
-            destination: value.destination,
-            updatedAt: value.updatedAt,
-          }];
-        });
-      onSnapshot(entries);
+      onSnapshot(publicDisplayEntriesFromSnapshot(snapshot.val()));
     },
     onError,
   );
@@ -1041,11 +1020,19 @@ export const publicTurnStatusUpdate = (
 export const publicDisplayEntryUpdate = (
   centerId: string,
   dayId: string,
-  entryKey: string,
+  caseId: string,
+  publicCode: string,
   entry: PublicDisplayEntry | null,
-) => ({
-  [`public/displays/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}/${publicPathSegment(entryKey)}`]: entry,
-});
+) => {
+  const basePath = `public/displays/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}`;
+  const canonicalKey = publicPathSegment(publicCode);
+  const legacyKey = publicPathSegment(caseId);
+  return {
+    [`${basePath}/${canonicalKey}`]: entry,
+    ...(legacyKey !== canonicalKey ? { [`${basePath}/${legacyKey}`]: null } : {}),
+    [`${basePath}/cases/${legacyKey}`]: null,
+  };
+};
 
 export const toPublicDisplayCallEvent = (
   caseItem: CaseRecord,
@@ -1100,24 +1087,26 @@ export const removePublicTurnStatus = (publicToken: string) => {
 export const writePublicDisplayEntry = (
   centerId: string,
   dayId: string,
-  entryKey: string,
+  caseId: string,
+  publicCode: string,
   entry: PublicDisplayEntry,
 ) => {
   if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
   return update(
     ref(database),
-    publicDisplayEntryUpdate(centerId, dayId, entryKey, entry),
+    publicDisplayEntryUpdate(centerId, dayId, caseId, publicCode, entry),
   );
 };
 
 export const removePublicDisplayEntry = (
   centerId: string,
   dayId: string,
-  entryKey: string,
+  caseId: string,
+  publicCode: string,
 ) => {
   if (!database) return Promise.reject(new Error("FIREBASE_DATABASE_UNAVAILABLE"));
   return update(
     ref(database),
-    publicDisplayEntryUpdate(centerId, dayId, entryKey, null),
+    publicDisplayEntryUpdate(centerId, dayId, caseId, publicCode, null),
   );
 };

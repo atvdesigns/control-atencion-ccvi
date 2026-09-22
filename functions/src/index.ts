@@ -861,6 +861,29 @@ export const authorizePriorityWindow = (
     ["enhanced", "standard"].includes(windowItem.validationLevel) ? windowItem : null;
 };
 
+export const hasUniqueWindowPublicCodePrefixes = (windows: CenterWindow[]) => {
+  const enabledPrefixes = windows
+    .filter((windowItem) => windowItem.enabled === true)
+    .map((windowItem) => windowItem.publicCodePrefix);
+  return enabledPrefixes.every((prefix) => /^V[1-9]\d*$/.test(prefix)) &&
+    new Set(enabledPrefixes).size === enabledPrefixes.length;
+};
+
+export const publicDisplayProjectionUpdates = (
+  centerId: string,
+  dayId: string,
+  caseId: string,
+  publicCode: string,
+  projection: Record<string, unknown> | null,
+) => {
+  const basePath = `public/displays/${centerId}/${dayId}`;
+  return {
+    [`${basePath}/${publicCode}`]: projection,
+    ...(caseId !== publicCode ? { [`${basePath}/${caseId}`]: null } : {}),
+    [`${basePath}/cases/${caseId}`]: null,
+  };
+};
+
 export const authorizeDocumentationWindow = (
   profile: UserProfile | null,
   uid: string,
@@ -1664,6 +1687,10 @@ export const createKioskArrival = onCall(
         throw new HttpsError("failed-precondition", "El centro no está disponible para emitir turnos.");
       }
 
+      if (!hasUniqueWindowPublicCodePrefixes(valuesOf(center.windows))) {
+        throw new HttpsError("failed-precondition", "La configuración de ventanillas no está disponible.");
+      }
+
       const assignedWindow = valuesOf(center.windows)
         .filter((windowItem) => windowItem.enabled === true && windowItem.serviceType === serviceType)
         .sort((a, b) => a.displayOrder - b.displayOrder)[0];
@@ -1891,6 +1918,10 @@ export const createPriorityArrival = onCall(
         log("unauthorized", "authority");
         return { ok: false, outcome: "unauthorized" as const };
       }
+      if (!hasUniqueWindowPublicCodePrefixes(valuesOf(center.windows))) {
+        log("config_unavailable", "center");
+        return { ok: false, outcome: "config_unavailable" as const };
+      }
       const now = new Date();
       const timestamp = now.getTime();
       const schedule = resolvePrioritySchedule(center, centerId, now);
@@ -1963,7 +1994,9 @@ export const createPriorityArrival = onCall(
             requirements: publicRequirements(center, assignedWindow.serviceType),
             paymentMethods: publicPaymentMethods(center),
           },
-          [`public/displays/${centerId}/${schedule.dayId}/cases/${context.caseId}`]: null,
+          ...publicDisplayProjectionUpdates(
+            centerId, schedule.dayId, context.caseId, createdCase.publicCode, null,
+          ),
         });
       });
       if (response.outcome === "created_but_projection_sync_failed") {
@@ -2107,8 +2140,7 @@ export const updateCasePriority = onCall(
             updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
             paymentMethods: publicPaymentMethods(center),
           },
-          [`public/displays/${centerId}/${dayId}/${caseId}`]: activeProjection,
-          [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: activeProjection,
+          ...publicDisplayProjectionUpdates(centerId, dayId, caseId, current.publicCode, activeProjection),
         });
       } catch {
         finish(`${result.status}_projection_failed`);
@@ -2199,14 +2231,10 @@ const createWindowTransitionCallable = (operation: WindowTransitionOperation) =>
             updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
             paymentMethods: publicPaymentMethods(center),
           },
-          [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: operation === "start" ? {
+          ...publicDisplayProjectionUpdates(centerId, dayId, caseId, current.publicCode, operation === "start" ? {
             publicCode: current.publicCode, isPriority: current.isPriority, status, destination,
             updatedAt: current.updatedAt,
-          } : null,
-          [`public/displays/${centerId}/${dayId}/${caseId}`]: operation === "start" ? {
-            publicCode: current.publicCode, isPriority: current.isPriority, status, destination,
-            updatedAt: current.updatedAt,
-          } : null,
+          } : null),
         });
       });
       finish(response.outcome);
@@ -2331,8 +2359,7 @@ export const finishWindowDocumentValidation = onCall(
               updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
               paymentMethods: publicPaymentMethods(center),
             },
-            [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: null,
-            [`public/displays/${centerId}/${dayId}/${caseId}`]: null,
+            ...publicDisplayProjectionUpdates(centerId, dayId, caseId, current.publicCode, null),
           });
         },
         (knownCommitted) => { committedHolder.value = knownCommitted; },
@@ -2419,12 +2446,11 @@ const createDocumentationWaitCallable = (operation: DocumentationWaitOperation) 
               updatedAt: caseRecord.updatedAt, requirements: publicRequirements(center, caseRecord.serviceType),
               paymentMethods: publicPaymentMethods(center),
             },
-            [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: waiting ? null : {
+            ...publicDisplayProjectionUpdates(centerId, dayId, caseId, caseRecord.publicCode, waiting ? null : {
               publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority,
               status: "Atención en ventanilla", destination: `Ventanilla ${caseRecord.assignedWindowNumber}`,
               updatedAt: caseRecord.updatedAt,
-            },
-            ...(waiting ? { [`public/displays/${centerId}/${dayId}/${caseId}`]: null } : {}),
+            }),
           });
         },
         (committed) => { committedHolder.value = committed; },
@@ -2528,8 +2554,7 @@ export const reassignWindowCase = onCall(
               requirements: publicRequirements(center, current.serviceType),
               paymentMethods: publicPaymentMethods(center),
             },
-            [`public/displays/${centerId}/${dayId}/cases/${caseId}`]: null,
-            [`public/displays/${centerId}/${dayId}/${caseId}`]: null,
+            ...publicDisplayProjectionUpdates(centerId, dayId, caseId, current.publicCode, null),
           });
         },
         (knownCommitted) => { committed = knownCommitted; },
@@ -2697,13 +2722,13 @@ export const callNextWindowCase = onCall(
           requirements: publicRequirements(center, committedCase.serviceType),
           paymentMethods: publicPaymentMethods(center),
         },
-        [`public/displays/${centerId}/${dayId}/${committedCase.caseId}`]: {
+        ...publicDisplayProjectionUpdates(centerId, dayId, committedCase.caseId, committedCase.publicCode, {
           publicCode: committedCase.publicCode,
           isPriority: committedCase.isPriority,
           status: `Diríjase a ${destination}`,
           destination,
           updatedAt: timestamp,
-        },
+        }),
         [`public/displayCalls/${centerId}/${dayId}/${eventId}`]: {
           publicCode: committedCase.publicCode,
           isPriority: committedCase.isPriority,
@@ -2757,10 +2782,10 @@ const cashierProjection = async (
       updatedAt: caseRecord.updatedAt, requirements: publicRequirements(center, caseRecord.serviceType),
       paymentMethods: publicPaymentMethods(center),
     },
-    [`public/displays/${caseRecord.centerId}/${dayId}/${caseRecord.caseId}`]: {
+    ...publicDisplayProjectionUpdates(caseRecord.centerId, dayId, caseRecord.caseId, caseRecord.publicCode, {
       publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority, status, destination,
       updatedAt: caseRecord.updatedAt,
-    },
+    }),
   };
   if (includeCall) updates[`public/displayCalls/${caseRecord.centerId}/${dayId}/${String(committed.event.eventId)}`] = {
     publicCode: caseRecord.publicCode, isPriority: caseRecord.isPriority,
@@ -2858,9 +2883,9 @@ const cashierFollowupProjection = async (
       updatedAt: current.updatedAt, requirements: publicRequirements(center, current.serviceType),
       paymentMethods: publicPaymentMethods(center),
     },
-    [`public/displays/${current.centerId}/${dayId}/${current.caseId}`]: operation === "resume" ? {
+    ...publicDisplayProjectionUpdates(current.centerId, dayId, current.caseId, current.publicCode, operation === "resume" ? {
       publicCode: current.publicCode, isPriority: current.isPriority, status, destination, updatedAt: current.updatedAt,
-    } : null,
+    } : null),
   });
 };
 
