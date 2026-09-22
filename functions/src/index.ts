@@ -411,14 +411,18 @@ const priorityTypes: PriorityType[] = [
   "older_adult", "pregnant", "wheelchair_user", "disability", "reduced_mobility", "other",
 ];
 export const isPriorityArrivalInput = (value: unknown): value is {
-  centerId: string; priorityType: PriorityType; commandId: string;
+  centerId: string; priorityType: PriorityType; commandId?: string;
 } => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
-  return Object.keys(input).length === 3 && typeof input.centerId === "string" &&
+  const keys = Object.keys(input);
+  return (keys.length === 2 || keys.length === 3) && keys.includes("centerId") &&
+    keys.includes("priorityType") && (keys.length === 2 || keys.includes("commandId")) &&
+    typeof input.centerId === "string" &&
     centerIdPattern.test(input.centerId) && typeof input.priorityType === "string" &&
-    priorityTypes.includes(input.priorityType as PriorityType) && typeof input.commandId === "string" &&
-    commandIdPattern.test(input.commandId);
+    priorityTypes.includes(input.priorityType as PriorityType) &&
+    (input.commandId === undefined ||
+      (typeof input.commandId === "string" && commandIdPattern.test(input.commandId)));
 };
 const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const centerIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
@@ -1706,17 +1710,17 @@ const parseInput = (value: unknown): KioskArrivalInput => {
   const input = value as Record<string, unknown>;
   const keys = Object.keys(input);
   if (
-    keys.length !== 3 ||
+    (keys.length !== 2 && keys.length !== 3) ||
     !keys.includes("centerId") ||
     !keys.includes("serviceType") ||
-    !keys.includes("commandId") ||
+    (keys.length === 3 && !keys.includes("commandId")) ||
     typeof input.centerId !== "string" ||
     !centerIdPattern.test(input.centerId) ||
     typeof input.serviceType !== "string" ||
     input.serviceType.length > 32 ||
     !serviceTypes.includes(input.serviceType as ServiceType) ||
-    typeof input.commandId !== "string" ||
-    !commandIdPattern.test(input.commandId)
+    (input.commandId !== undefined &&
+      (typeof input.commandId !== "string" || !commandIdPattern.test(input.commandId)))
   ) {
     throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
   }
@@ -1724,7 +1728,7 @@ const parseInput = (value: unknown): KioskArrivalInput => {
   return {
     centerId: input.centerId,
     serviceType: input.serviceType as ServiceType,
-    commandId: input.commandId,
+    commandId: typeof input.commandId === "string" ? input.commandId : randomUUID(),
   };
 };
 
@@ -2055,7 +2059,7 @@ export const createPriorityArrival = onCall(
       }
       const centerId = request.data.centerId;
       const priorityType = request.data.priorityType;
-      const commandId = request.data.commandId;
+      const commandId = request.data.commandId ?? randomUUID();
       centerForLog = centerId;
       const uid = request.auth.uid;
       const database = getDatabase();
@@ -2808,13 +2812,16 @@ export const callNextWindowCase = onCall(
       }
       const input = request.data as Record<string, unknown>;
       if (
-        Object.keys(input).length !== 3 ||
+        (Object.keys(input).length !== 2 && Object.keys(input).length !== 3) ||
+        !Object.hasOwn(input, "centerId") ||
+        !Object.hasOwn(input, "windowId") ||
+        (Object.keys(input).length === 3 && !Object.hasOwn(input, "commandId")) ||
         typeof input.centerId !== "string" ||
         !centerIdPattern.test(input.centerId) ||
         typeof input.windowId !== "string" ||
         !windowIdPattern.test(input.windowId) ||
-        typeof input.commandId !== "string" ||
-        !commandIdPattern.test(input.commandId)
+        (input.commandId !== undefined &&
+          (typeof input.commandId !== "string" || !commandIdPattern.test(input.commandId)))
       ) {
         logFinalOutcome("invalid_request");
         throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
@@ -2822,7 +2829,7 @@ export const callNextWindowCase = onCall(
 
       const centerId = input.centerId;
       const requestedWindowId = input.windowId;
-      const commandId = input.commandId;
+      const commandId = typeof input.commandId === "string" ? input.commandId : randomUUID();
       const uid = request.auth.uid;
       const database = getDatabase();
       const [profileSnapshot, centerSnapshot] = await Promise.all([
@@ -2998,11 +3005,15 @@ const cashierCommandInput = (value: unknown, requireQueueItem: boolean): {
 } | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
-  const expectedKeys = requireQueueItem ? ["centerId", "queueItemId"] : ["centerId", "commandId"];
-  if (Object.keys(input).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(input, key)) ||
+  const expectedKeys = requireQueueItem ? ["centerId", "queueItemId"] : ["centerId"];
+  const keys = Object.keys(input);
+  if ((requireQueueItem ? keys.length !== 2 : (keys.length !== 1 && keys.length !== 2)) ||
+    expectedKeys.some((key) => !Object.hasOwn(input, key)) ||
+    (!requireQueueItem && keys.length === 2 && !Object.hasOwn(input, "commandId")) ||
     typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
     (requireQueueItem && (typeof input.queueItemId !== "string" || !windowIdPattern.test(input.queueItemId))) ||
-    (!requireQueueItem && (typeof input.commandId !== "string" || !commandIdPattern.test(input.commandId)))) return null;
+    (!requireQueueItem && input.commandId !== undefined &&
+      (typeof input.commandId !== "string" || !commandIdPattern.test(input.commandId)))) return null;
   return { centerId: input.centerId, ...(requireQueueItem ? { queueItemId: input.queueItemId as string } : {
     commandId: input.commandId as string,
   }) };
@@ -3042,6 +3053,7 @@ const executeCashierCallable = async (
   if (!request.auth?.uid) return { ok: false, outcome: "unauthenticated" as const };
   const database = getDatabase();
   const uid = request.auth.uid;
+  const effectiveCommandId = operation === "call" ? input.commandId ?? randomUUID() : undefined;
   const [profileSnapshot, centerSnapshot] = await Promise.all([
     database.ref(`users/${uid}`).get(), database.ref(`centers/${input.centerId}`).get(),
   ]);
@@ -3059,7 +3071,7 @@ const executeCashierCallable = async (
     centerId: input.centerId, sessionId: `${input.centerId}-${dayId}`, cashierId: cashier.cashierId,
     uid, timestamp: Date.now(), eventId: randomUUID(), ...(input.queueItemId ? { queueItemId: input.queueItemId } : {}),
     ...(operation === "call" ? {
-      commandId: input.commandId,
+      commandId: effectiveCommandId,
       requestFingerprint: commandFingerprint({
         operation: "callNextCashierCase", centerId: input.centerId,
         operationalDayId: dayId, cashierId: cashier.cashierId, actorUid: uid,
@@ -3082,8 +3094,8 @@ const executeCashierCallable = async (
         (committed.caseRecord.currentState === "called_to_cashier" &&
           committed.queueItem.state === "called_to_cashier" &&
           committed.queueItem.calledAt === committed.caseRecord.calledToCashierAt);
-      const priorReceipt = operation === "call" && input.commandId
-        ? (await reference.child(`commandReceipts/${input.commandId}`).get()).val() as CommandReceipt | null
+      const priorReceipt = operation === "call" && effectiveCommandId
+        ? (await reference.child(`commandReceipts/${effectiveCommandId}`).get()).val() as CommandReceipt | null
         : null;
       if (projectionStillApplicable) {
         await cashierProjection(database, center, cashier, dayId, committed, operation === "call");
@@ -3091,16 +3103,16 @@ const executeCashierCallable = async (
       if (!projectionStillApplicable && priorReceipt?.projectionStatus === "failed") {
         return { ok: true, outcome: "called_projection_failed" as const, ...committed };
       }
-      if (operation === "call" && input.commandId) {
-        await reference.child(`commandReceipts/${input.commandId}`).update({
+      if (operation === "call" && effectiveCommandId) {
+        await reference.child(`commandReceipts/${effectiveCommandId}`).update({
           projectionStatus: "synced", warningCategory: null,
         });
       }
       return { ok: true, outcome: operation === "call" ? "called" as const : "started" as const, ...committed };
     } catch {
-      if (operation === "call" && input.commandId) {
+      if (operation === "call" && effectiveCommandId) {
         try {
-          await reference.child(`commandReceipts/${input.commandId}`).update({
+          await reference.child(`commandReceipts/${effectiveCommandId}`).update({
             projectionStatus: "failed", warningCategory: "called_projection_failed",
           });
         } catch {

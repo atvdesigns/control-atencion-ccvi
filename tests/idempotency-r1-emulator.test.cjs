@@ -147,3 +147,85 @@ test("cashier retry replays the original queue selection after it advances", asy
     assert.equal(next.caseRecord.caseId, "b");
   } finally { await cleanup(centerId, [uid]); }
 });
+
+test("legacy kiosk request without commandId uses the normal atomic receipt path", async () => {
+  const centerId = `idem-legacy-kiosk-${process.pid}`;
+  try {
+    await database.ref(`centers/${centerId}`).set(center(centerId));
+    const created = await invoke(functions.createKioskArrival, { centerId, serviceType: "representation" });
+    assert.match(created.publicCode, /^V1-/); assert.equal(typeof created.publicToken, "string");
+    const day = (await database.ref(`days/${centerId}/${today()}`).get()).val();
+    assert.equal(Object.keys(day.cases).length, 1); assert.equal(Object.keys(day.events).length, 1);
+    assert.equal(Object.keys(day.commandReceipts).length, 1);
+    const receipt = Object.values(day.commandReceipts)[0];
+    assert.equal(receipt.operation, "createKioskArrival"); assert.equal(receipt.status, "committed");
+    await assert.rejects(() => invoke(functions.createKioskArrival,
+      { centerId: "missing-center", serviceType: "representation" }), error => error.code === "not-found");
+  } finally { await cleanup(centerId); }
+});
+
+test("legacy priority request without commandId preserves authorization and one mutation", async () => {
+  const centerId = `idem-legacy-priority-${process.pid}`; const uid = `legacy-priority-${process.pid}`;
+  try {
+    await database.ref(`centers/${centerId}`).set(center(centerId));
+    const unauthenticated = await invoke(functions.createPriorityArrival, { centerId, priorityType: "other" });
+    assert.equal(unauthenticated.outcome, "unauthenticated");
+    await database.ref(`users/${uid}`).set({ uid, role: "operator-window-1", enabled: true,
+      centerIds: [centerId], centerAccess: { [centerId]: true }, windowId: "w1" });
+    const created = await invoke(functions.createPriorityArrival, { centerId, priorityType: "other" }, uid);
+    assert.equal(created.outcome, "created");
+    const day = (await database.ref(`days/${centerId}/${today()}`).get()).val();
+    assert.equal(Object.keys(day.cases).length, 1); assert.equal(Object.keys(day.events).length, 2);
+    assert.equal(Object.keys(day.commandReceipts).length, 1);
+    assert.equal(Object.values(day.commandReceipts)[0].operation, "createPriorityArrival");
+  } finally { await cleanup(centerId, [uid]); }
+});
+
+test("legacy Window Call Next without commandId preserves authorization and one selection", async () => {
+  const centerId = `idem-legacy-window-${process.pid}`; const uid = `legacy-window-${process.pid}`;
+  const dayId = today(); const sessionId = `${centerId}-${dayId}`;
+  try {
+    await database.ref(`centers/${centerId}`).set(center(centerId));
+    await assert.rejects(() => invoke(functions.callNextWindowCase, { centerId, windowId: "w1" }),
+      error => error.code === "unauthenticated");
+    await database.ref(`users/${uid}`).set({ uid, role: "operator-window-1", enabled: true,
+      centerIds: [centerId], centerAccess: { [centerId]: true }, windowId: "w1" });
+    await database.ref(`days/${centerId}/${dayId}`).set({ metadata: { status: "open",
+      consecutivePriorityCasesByWindow: { w1: 0 } }, cases: {
+      c1: waitingCase(centerId, sessionId, "c1"), c2: waitingCase(centerId, sessionId, "c2"),
+    }, events: {} });
+    const called = await invoke(functions.callNextWindowCase, { centerId, windowId: "w1" }, uid);
+    assert.equal(called.publicCode, "V1-c1");
+    const day = (await database.ref(`days/${centerId}/${dayId}`).get()).val();
+    assert.equal(day.cases.c1.currentState, "called_to_window");
+    assert.equal(day.cases.c2.currentState, "waiting_document_validation");
+    assert.equal(Object.keys(day.events).length, 1); assert.equal(Object.keys(day.commandReceipts).length, 1);
+    assert.equal(Object.values(day.commandReceipts)[0].operation, "callNextWindowCase");
+  } finally { await cleanup(centerId, [uid]); }
+});
+
+test("legacy Cashier Call Next without commandId preserves authorization and one selection", async () => {
+  const centerId = `idem-legacy-cashier-${process.pid}`; const uid = `legacy-cashier-${process.pid}`;
+  const dayId = today(); const sessionId = `${centerId}-${dayId}`;
+  const cases = { a: { ...waitingCase(centerId, sessionId, "1"), caseId: "a", currentState: "waiting_cashier" },
+    b: { ...waitingCase(centerId, sessionId, "2"), caseId: "b", currentState: "waiting_cashier" } };
+  const queue = Object.fromEntries(["a", "b"].map((id, index) => [`q-${id}`, { queueItemId: `q-${id}`, centerId,
+    sessionId, caseId: id, publicCode: cases[id].publicCode, folderCode: `F-${id}`, queueNumber: index + 1,
+    approvedAt: index + 1, state: "waiting_cashier", cashierId: null }]));
+  try {
+    await database.ref(`centers/${centerId}`).set(center(centerId));
+    const unauthenticated = await invoke(functions.callNextCashierCase, { centerId });
+    assert.equal(unauthenticated.outcome, "unauthenticated");
+    await database.ref(`users/${uid}`).set({ uid, role: "cashier", enabled: true, cashierId: "c1",
+      centerIds: [centerId], centerAccess: { [centerId]: true } });
+    await database.ref(`days/${centerId}/${dayId}`).set({ metadata: { status: "open",
+      consecutivePriorityCasesForCashier: 0 }, cases, paymentQueue: queue, events: {} });
+    const called = await invoke(functions.callNextCashierCase, { centerId }, uid);
+    assert.equal(called.caseRecord.caseId, "a");
+    const day = (await database.ref(`days/${centerId}/${dayId}`).get()).val();
+    assert.equal(day.paymentQueue["q-a"].state, "called_to_cashier");
+    assert.equal(day.paymentQueue["q-b"].state, "waiting_cashier");
+    assert.equal(Object.keys(day.events).length, 1); assert.equal(Object.keys(day.commandReceipts).length, 1);
+    assert.equal(Object.values(day.commandReceipts)[0].operation, "callNextCashierCase");
+  } finally { await cleanup(centerId, [uid]); }
+});

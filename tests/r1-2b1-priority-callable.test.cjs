@@ -12,7 +12,9 @@ const profile = (overrides = {}) => ({ uid: "user", role: "operator-window-1", c
 test("validates the minimal priority input and rejects arbitrary fields", () => {
   const commandId = "00000000-0000-4000-8000-000000000001";
   assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other", commandId }), true);
+  assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other" }), true);
   assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "invalid" }), false);
+  assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other", commandId: "invalid" }), false);
   assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other", commandId,
     publicCode: "V1-99" }), false);
 });
