@@ -3027,3 +3027,33 @@ export const hydrateOperationalDayView = onCall(
     return { ok: true, outcome: "ready" as const };
   },
 );
+
+export const listAdminOperationalDays = onCall(
+  { region: "us-central1", enforceAppCheck: false },
+  async (request) => {
+    if (!request.auth?.uid) return { ok: false, outcome: "unauthenticated" as const, sessions: [] };
+    const input = request.data as Record<string, unknown> | null;
+    if (!input || Object.keys(input).length !== 1 || typeof input.centerId !== "string" ||
+      !centerIdPattern.test(input.centerId)) {
+      return { ok: false, outcome: "invalid_request" as const, sessions: [] };
+    }
+    const database = getDatabase();
+    const profileSnapshot = await database.ref(`users/${request.auth.uid}`).get();
+    if (!profileSnapshot.exists()) return { ok: false, outcome: "unauthorized" as const, sessions: [] };
+    const profile = profileSnapshot.val() as UserProfile;
+    if (profile.uid !== request.auth.uid || profile.enabled !== true || profile.role !== "admin" ||
+      !profile.centerIds?.includes(input.centerId) || profile.centerAccess?.[input.centerId] !== true) {
+      return { ok: false, outcome: "unauthorized" as const, sessions: [] };
+    }
+    const daysSnapshot = await database.ref(`days/${input.centerId}`).get();
+    const days = recordOf<Record<string, unknown>>(daysSnapshot.val());
+    const sessions = Object.entries(days).flatMap(([dayId, day]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayId)) return [];
+      const metadata = recordOf<unknown>(day.metadata);
+      if (metadata.sessionId !== `${input.centerId}-${dayId}` || metadata.centerId !== input.centerId ||
+        metadata.date !== dayId) return [];
+      return [{ ...metadata, sessionId: metadata.sessionId, centerId: input.centerId, date: dayId }];
+    }).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    return { ok: true, outcome: "ready" as const, sessions };
+  },
+);

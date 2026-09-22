@@ -636,6 +636,27 @@ export const hydrateOperationalDayViewCallable = async (centerId: string, dayId:
   return result.data;
 };
 
+export const listAdminOperationalDaysCallable = async (centerId: string): Promise<SessionMetadata[]> => {
+  if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
+  const callable = httpsCallable<
+    { centerId: string },
+    { ok: boolean; outcome: string; sessions: SessionMetadata[] }
+  >(functions, "listAdminOperationalDays");
+  const result = await callable({ centerId });
+  if (!result.data?.ok || !Array.isArray(result.data.sessions)) throw new Error(result.data?.outcome ?? "INVALID_HISTORY_INDEX");
+  return result.data.sessions;
+};
+
+export const readAdminOperationalDayOnce = async (
+  centerId: string,
+  dayId: string,
+): Promise<OperationalDaySnapshot> => {
+  if (!database) throw new Error("FIREBASE_DATABASE_UNAVAILABLE");
+  const snapshot = await get(ref(database, `days/${publicPathSegment(centerId)}/${publicPathSegment(dayId)}`));
+  if (!snapshot.exists()) return { cases: {}, paymentQueue: {}, events: {} };
+  return snapshot.val() as OperationalDaySnapshot;
+};
+
 export const subscribeToOperationalDay = (
   centerId: string,
   dayId: string,

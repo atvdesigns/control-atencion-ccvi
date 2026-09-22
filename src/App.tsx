@@ -144,6 +144,9 @@ import {
 } from "./operationalCenterConfig";
 import {
   adminReportDataFromSnapshot,
+  adminRangeDataFromSnapshots,
+  authoritativeReportingSessions,
+  includedOperationalDays,
   sortTraceEventsNewestFirst,
   traceEventsFromSnapshot,
 } from "./adminReporting";
@@ -152,6 +155,8 @@ import {
   hasFirebaseConfig,
   getCenterConfigRealtime,
   hydrateOperationalDayViewCallable,
+  listAdminOperationalDaysCallable,
+  readAdminOperationalDayOnce,
   removeCenterConfigRealtime,
   observeAuthSession,
   signInWithUsername,
@@ -4002,11 +4007,10 @@ const AdminView = ({
 }) => {
   const center = getCurrentCenter(data);
   const session = getCurrentSession(data);
-  const availableSessions = Object.values(data.sessions)
-    .filter((sessionItem) => sessionItem.centerId === center.centerId)
-    .sort((a, b) => b.date.localeCompare(a.date));
   const [selectedMetricsSessionId, setSelectedMetricsSessionId] = useState(session.sessionId);
   const previousLiveSessionId = useRef(session.sessionId);
+  const [authoritativeSessions, setAuthoritativeSessions] = useState<SessionMetadata[]>([session]);
+  const [rangeSnapshots, setRangeSnapshots] = useState<Record<string, OperationalDaySnapshot>>({});
   const [historicalReportDay, setHistoricalReportDay] = useState<{
     centerId: string;
     dayId: string;
@@ -4014,7 +4018,11 @@ const AdminView = ({
   } | null>(null);
   const [cashierPerformancePeriod, setCashierPerformancePeriod] = useState<"today" | "week" | "month">("today");
   const [rejectedUsersPeriod, setRejectedUsersPeriod] = useState<"today" | "week" | "month" | "year">("today");
-  const selectedMetricsSession = data.sessions[selectedMetricsSessionId] ?? session;
+  const availableAuthoritativeSessions = useMemo(
+    () => authoritativeReportingSessions(session, authoritativeSessions),
+    [authoritativeSessions, session],
+  );
+  const selectedMetricsSession = availableAuthoritativeSessions.find((item) => item.sessionId === selectedMetricsSessionId) ?? session;
   const historicalSelection = selectedMetricsSession.sessionId !== session.sessionId;
   const matchingHistoricalSnapshot = historicalReportDay?.centerId === center.centerId &&
     historicalReportDay.dayId === selectedMetricsSession.date
@@ -4024,21 +4032,14 @@ const AdminView = ({
     ? adminReportDataFromSnapshot(data, selectedMetricsSession, matchingHistoricalSnapshot ?? {})
     : data;
   const metrics = calculateMetrics(reportData, selectedMetricsSession.sessionId);
+  const persistedDayIds = availableAuthoritativeSessions.map((item) => item.date);
+  const cashierDays = includedOperationalDays(persistedDayIds, session.date, cashierPerformancePeriod);
+  const rejectedDays = includedOperationalDays(persistedDayIds, session.date, rejectedUsersPeriod);
+  const cashierRangeData = cashierPerformancePeriod === "today" ? data :
+    adminRangeDataFromSnapshots(data, session.date, cashierDays, rangeSnapshots);
+  const rejectedRangeData = rejectedUsersPeriod === "today" ? data :
+    adminRangeDataFromSnapshots(data, session.date, rejectedDays, rangeSnapshots);
   const cashierPerformance = useMemo(() => {
-    const now = new Date();
-    const periodStart = new Date(now);
-    if (cashierPerformancePeriod === "today") {
-      periodStart.setHours(0, 0, 0, 0);
-    } else if (cashierPerformancePeriod === "week") {
-      const daysSinceMonday = (periodStart.getDay() + 6) % 7;
-      periodStart.setDate(periodStart.getDate() - daysSinceMonday);
-      periodStart.setHours(0, 0, 0, 0);
-    } else {
-      periodStart.setDate(1);
-      periodStart.setHours(0, 0, 0, 0);
-    }
-    const periodStartTimestamp = periodStart.getTime();
-    const nowTimestamp = now.getTime();
     const groups = new Map<
       string,
       {
@@ -4051,16 +4052,13 @@ const AdminView = ({
       }
     >();
 
-    Object.values(data.cases)
+    Object.values(cashierRangeData.cases)
       .filter((caseItem) => {
-        const completedAt = caseItem.paymentCompletedAt ?? caseItem.completedAt;
         return (
           caseItem.centerId === center.centerId &&
           caseItem.currentState === "completed" &&
           caseItem.cashierId &&
-          typeof completedAt === "number" &&
-          completedAt >= periodStartTimestamp &&
-          completedAt <= nowTimestamp
+          typeof (caseItem.paymentCompletedAt ?? caseItem.completedAt) === "number"
         );
       })
       .forEach((caseItem) => {
@@ -4107,48 +4105,26 @@ const AdminView = ({
           b.completedCount - a.completedCount ||
           a.cashierName.localeCompare(b.cashierName, "es"),
       );
-  }, [cashierPerformancePeriod, center.centerId, data.cases]);
+  }, [cashierRangeData.cases, center.centerId]);
   const clpFormatter = useMemo(
     () => new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }),
     [],
   );
   const rejectedUsers = useMemo(() => {
-    const now = new Date();
-    const periodStart = new Date(now);
-
-    if (rejectedUsersPeriod === "today") {
-      periodStart.setHours(0, 0, 0, 0);
-    } else if (rejectedUsersPeriod === "week") {
-      const daysSinceMonday = (periodStart.getDay() + 6) % 7;
-      periodStart.setDate(periodStart.getDate() - daysSinceMonday);
-      periodStart.setHours(0, 0, 0, 0);
-    } else if (rejectedUsersPeriod === "month") {
-      periodStart.setDate(1);
-      periodStart.setHours(0, 0, 0, 0);
-    } else {
-      periodStart.setMonth(0, 1);
-      periodStart.setHours(0, 0, 0, 0);
-    }
-
-    const periodStartTimestamp = periodStart.getTime();
-    const nowTimestamp = now.getTime();
-
-    return Object.values(data.cases)
+    return Object.values(rejectedRangeData.cases)
       .filter(
         (caseItem) =>
           caseItem.centerId === center.centerId &&
           caseItem.currentState === "rejected" &&
           caseItem.documentStatus === "rejected" &&
-          typeof caseItem.documentValidationCompletedAt === "number" &&
-          caseItem.documentValidationCompletedAt >= periodStartTimestamp &&
-          caseItem.documentValidationCompletedAt <= nowTimestamp,
+          typeof caseItem.documentValidationCompletedAt === "number",
       )
       .sort(
         (a, b) =>
           (b.documentValidationCompletedAt as number) -
           (a.documentValidationCompletedAt as number),
       );
-  }, [center.centerId, data.cases, rejectedUsersPeriod]);
+  }, [center.centerId, rejectedRangeData.cases]);
   const rejectedAtFormatter = useMemo(
     () =>
       new Intl.DateTimeFormat("es-CL", {
@@ -4173,12 +4149,31 @@ const AdminView = ({
   useEffect(() => {
     if (
       selectedMetricsSessionId === previousLiveSessionId.current ||
-      !availableSessions.some((sessionItem) => sessionItem.sessionId === selectedMetricsSessionId)
+      !availableAuthoritativeSessions.some((sessionItem) => sessionItem.sessionId === selectedMetricsSessionId)
     ) {
       setSelectedMetricsSessionId(session.sessionId);
     }
     previousLiveSessionId.current = session.sessionId;
-  }, [availableSessions, selectedMetricsSessionId, session.sessionId]);
+  }, [availableAuthoritativeSessions, selectedMetricsSessionId, session.sessionId]);
+
+  useEffect(() => {
+    let active = true;
+    void listAdminOperationalDaysCallable(center.centerId).then((sessions) => {
+      if (active) setAuthoritativeSessions(sessions);
+    }).catch(() => {
+      if (active) setAuthoritativeSessions([session]);
+    });
+    return () => { active = false; };
+  }, [center.centerId, session.sessionId]);
+
+  useEffect(() => {
+    const required = Array.from(new Set([...cashierDays, ...rejectedDays])).filter((item) => item !== session.date);
+    let active = true;
+    void Promise.all(required.map(async (item) => [item, await readAdminOperationalDayOnce(center.centerId, item)] as const))
+      .then((entries) => { if (active) setRangeSnapshots(Object.fromEntries(entries)); })
+      .catch(() => { if (active) setRangeSnapshots({}); });
+    return () => { active = false; };
+  }, [center.centerId, session.date, cashierPerformancePeriod, rejectedUsersPeriod, authoritativeSessions]);
 
   useEffect(() => {
     setHistoricalReportDay(null);
@@ -4232,7 +4227,7 @@ const AdminView = ({
                   helperText="Seleccione la jornada que desea revisar."
                   sx={{ minWidth: { xs: "100%", sm: 220 } }}
                 >
-                  {availableSessions.map((sessionItem) => (
+                  {availableAuthoritativeSessions.map((sessionItem) => (
                     <MenuItem key={sessionItem.sessionId} value={sessionItem.sessionId}>
                       {sessionItem.date}
                     </MenuItem>

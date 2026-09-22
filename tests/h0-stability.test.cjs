@@ -182,7 +182,7 @@ test("Admin follows live day but preserves explicitly selected historical day", 
     let result = selected;
     const previousLiveSessionId = { current: "center-2026-09-11" };
     vm.runInNewContext(compile(adminSelectionEffect), {
-      availableSessions: ["center-2026-09-09", "center-2026-09-11", "center-2026-09-12"].map((sessionId) => ({ sessionId })),
+      availableAuthoritativeSessions: ["center-2026-09-09", "center-2026-09-11", "center-2026-09-12"].map((sessionId) => ({ sessionId })),
       selectedMetricsSessionId: selected, previousLiveSessionId,
       session: { sessionId: "center-2026-09-12" },
       setSelectedMetricsSessionId(value) { result = value; },
