@@ -86,6 +86,7 @@ interface CreateKioskArrivalResponse {
 
 export type CallNextWindowCaseOutcome =
   | "called"
+  | "called_projection_failed"
   | "no_eligible_case"
   | "active_case_exists";
 
@@ -102,7 +103,7 @@ export type CashierCommandOutcome =
   | "completed" | "completed_projection_failed"
   | "queue_empty" | "cashier_busy" | "case_not_found" | "invalid_case_state"
   | "unauthenticated" | "unauthorized" | "invalid_request" | "config_unavailable"
-  | "conflict" | "internal_error";
+  | "conflict" | "idempotency_conflict" | "internal_error";
 
 export interface CashierCommandResponse {
   ok: boolean;
@@ -121,6 +122,7 @@ export type CreatePriorityArrivalOutcome =
   | "unauthorized"
   | "invalid_priority"
   | "transaction_conflict"
+  | "idempotency_conflict"
   | "created_but_projection_sync_failed"
   | "internal_error";
 
@@ -263,14 +265,15 @@ export interface PublicKioskConfig {
 export const createKioskArrivalCallable = async (
   centerId: string,
   serviceType: string,
+  commandId: string,
 ): Promise<CreateKioskArrivalResponse> => {
   if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
 
   const callable = httpsCallable<
-    { centerId: string; serviceType: string },
+    { centerId: string; serviceType: string; commandId: string },
     CreateKioskArrivalResponse
   >(functions, "createKioskArrival");
-  const result = await callable({ centerId, serviceType });
+  const result = await callable({ centerId, serviceType, commandId });
   if (
     !result.data ||
     typeof result.data.publicCode !== "string" ||
@@ -284,18 +287,19 @@ export const createKioskArrivalCallable = async (
 export const callNextWindowCaseCallable = async (
   centerId: string,
   windowId: string,
+  commandId: string,
 ): Promise<CallNextWindowCaseResponse> => {
   if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
 
   const callable = httpsCallable<
-    { centerId: string; windowId: string },
+    { centerId: string; windowId: string; commandId: string },
     CallNextWindowCaseResponse
   >(functions, "callNextWindowCase");
-  const result = await callable({ centerId, windowId });
+  const result = await callable({ centerId, windowId, commandId });
   if (
     !result.data ||
     typeof result.data.ok !== "boolean" ||
-    !["called", "no_eligible_case", "active_case_exists"].includes(result.data.outcome) ||
+    !["called", "called_projection_failed", "no_eligible_case", "active_case_exists"].includes(result.data.outcome) ||
     (result.data.publicCode !== undefined && typeof result.data.publicCode !== "string")
   ) {
     throw new Error("INVALID_CALL_NEXT_WINDOW_RESPONSE");
@@ -309,17 +313,19 @@ const cashierCommandCallable = async (
   centerId: string,
   queueItemId?: string,
   note?: string | null,
+  commandId?: string,
 ): Promise<CashierCommandResponse> => {
   if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
   const callable = httpsCallable<Record<string, string | null>, CashierCommandResponse>(functions, name);
   const result = await callable({ centerId, ...(queueItemId ? { queueItemId } : {}),
+    ...(commandId ? { commandId } : {}),
     ...(name === "pauseCashierPayment" ? { note: note ?? null } : {}) });
   const outcomes: CashierCommandOutcome[] = [
     "called", "called_projection_failed", "started", "started_projection_failed", "queue_empty",
     "paused", "paused_projection_failed", "resumed", "resumed_projection_failed", "no_show", "no_show_projection_failed",
     "completed", "completed_projection_failed",
     "cashier_busy", "case_not_found", "invalid_case_state", "unauthenticated", "unauthorized",
-    "invalid_request", "config_unavailable", "conflict", "internal_error",
+    "invalid_request", "config_unavailable", "conflict", "idempotency_conflict", "internal_error",
   ];
   if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome) ||
     (result.data.ok && (!result.data.caseRecord || !result.data.queueItem || !result.data.event))) {
@@ -328,8 +334,8 @@ const cashierCommandCallable = async (
   return result.data;
 };
 
-export const callNextCashierCaseCallable = (centerId: string) =>
-  cashierCommandCallable("callNextCashierCase", centerId);
+export const callNextCashierCaseCallable = (centerId: string, commandId: string) =>
+  cashierCommandCallable("callNextCashierCase", centerId, undefined, undefined, commandId);
 
 export const startCashierAttentionCallable = (centerId: string, queueItemId: string) =>
   cashierCommandCallable("startCashierAttention", centerId, queueItemId);
@@ -349,16 +355,18 @@ export const completeCashierPaymentCallable = (centerId: string, queueItemId: st
 export const createPriorityArrivalCallable = async (
   centerId: string,
   priorityType: PriorityType,
+  commandId: string,
 ): Promise<CreatePriorityArrivalResponse> => {
   if (!functions) throw new Error("FIREBASE_FUNCTIONS_UNAVAILABLE");
   const callable = httpsCallable<
-    { centerId: string; priorityType: PriorityType },
+    { centerId: string; priorityType: PriorityType; commandId: string },
     CreatePriorityArrivalResponse
   >(functions, "createPriorityArrival");
-  const result = await callable({ centerId, priorityType });
+  const result = await callable({ centerId, priorityType, commandId });
   const outcomes: CreatePriorityArrivalOutcome[] = [
     "created", "closed", "config_unavailable", "unauthenticated", "unauthorized",
-    "invalid_priority", "transaction_conflict", "created_but_projection_sync_failed", "internal_error",
+    "invalid_priority", "transaction_conflict", "idempotency_conflict",
+    "created_but_projection_sync_failed", "internal_error",
   ];
   if (!result.data || typeof result.data.ok !== "boolean" || !outcomes.includes(result.data.outcome)) {
     throw new Error("INVALID_PRIORITY_ARRIVAL_RESPONSE");

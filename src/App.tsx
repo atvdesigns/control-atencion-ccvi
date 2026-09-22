@@ -79,6 +79,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PublicJourneyStepper } from "./components/PublicJourneyStepper";
 import { PublicJourneyInformation } from "./components/PublicJourneyInformation";
 import { useOperationalDay } from "./useOperationalDay";
+import { clearCommandIntent, getOrCreateCommandIntent } from "./commandIntent";
 import {
   getPublicJourneyPresentation,
   getPublicJourneyStep,
@@ -1282,8 +1283,10 @@ const KioskView = ({ centerId }: { centerId: string }) => {
       return;
     }
 
+    const commandScope = `${center.centerId}:kiosk-arrival`;
+    const commandId = getOrCreateCommandIntent(commandScope, `${center.centerId}:${serviceType}`);
     try {
-      const created = await createKioskArrivalCallable(center.centerId, serviceType);
+      const created = await createKioskArrivalCallable(center.centerId, serviceType, commandId);
       const assignedWindow = center.windows
         .filter((item) => item.enabled && item.serviceType === serviceType)
         .sort((a, b) => a.displayOrder - b.displayOrder)[0];
@@ -1296,6 +1299,7 @@ const KioskView = ({ centerId }: { centerId: string }) => {
       });
       setRemainingSeconds(center.kioskTimeoutSeconds);
       setPendingService(null);
+      clearCommandIntent(commandScope, commandId);
     } catch {
       setCreationError("No pudimos generar su número. Revise la conexión e intente nuevamente.");
     } finally {
@@ -1776,6 +1780,9 @@ const CenteredShell = ({ children }: { children: React.ReactNode }) => (
 );
 
 export const callNextWindowFeedback = (outcome: CallNextWindowCaseOutcome) => {
+  if (outcome === "called_projection_failed") {
+    return "El turno fue llamado, pero no pudimos actualizar el display. No vuelva a llamarlo.";
+  }
   if (outcome === "no_eligible_case") return "No hay turnos disponibles para llamar.";
   if (outcome === "active_case_exists") {
     return "Finalice la atención actual antes de llamar otro turno.";
@@ -2016,6 +2023,11 @@ const OperatorView = ({
                   color="secondary"
                   startIcon={<PlayArrow />}
                   onClick={async () => {
+                    const commandScope = `${data.selectedCenterId}:${operatorWindow.windowId}:window-call-next`;
+                    const commandId = getOrCreateCommandIntent(
+                      commandScope,
+                      `${data.selectedCenterId}:${operatorWindow.windowId}`,
+                    );
                     await executeCallNextWindow({
                       pendingRef: callNextPendingRef,
                       setLoading: setIsCallingNext,
@@ -2023,8 +2035,10 @@ const OperatorView = ({
                         data,
                         operatorWindow.windowId,
                         role,
+                        commandId,
                       ),
                       onResult: (result) => {
+                        clearCommandIntent(commandScope, commandId);
                         setData(() => result.data);
                         const feedback = callNextWindowFeedback(result.outcome);
                         if (feedback) onFeedback(feedback);
@@ -2689,6 +2703,11 @@ const OperatorView = ({
                   return;
                 }
                 setIsCreatingPriority(true);
+                const commandScope = `${data.selectedCenterId}:${operatorWindow.windowId}:priority-arrival`;
+                const commandId = getOrCreateCommandIntent(
+                  commandScope,
+                  `${data.selectedCenterId}:${operatorWindow.windowId}:other`,
+                );
                 try {
                   const result = await createPriorityArrivalRealtime(
                     data,
@@ -2699,7 +2718,12 @@ const OperatorView = ({
                       operationalConfigContext,
                       getCurrentOperationalConfig,
                     ),
+                    new Date(),
+                    commandId,
                   );
+                  if (result.outcome !== "unexpected-error" && result.outcome !== "idempotency-conflict") {
+                    clearCommandIntent(commandScope, commandId);
+                  }
                   setData(() => result.data);
                   if (result.outcome === "created" && result.createdCase) {
                     setCreatedPriorityCase(result.createdCase);
@@ -2715,6 +2739,8 @@ const OperatorView = ({
                     onFeedback("No pudimos verificar la configuración del centro. Intente nuevamente cuando el horario esté disponible.");
                   } else if (result.outcome === "transaction-not-committed") {
                     onFeedback("No fue posible crear el turno. La jornada puede no estar disponible.");
+                  } else if (result.outcome === "idempotency-conflict") {
+                    onFeedback("No pudimos confirmar esta operación. Actualice la pantalla antes de continuar.");
                   } else {
                     onFeedback("No fue posible crear el turno preferencial. Intente nuevamente.");
                   }
@@ -3185,8 +3211,14 @@ const CashierView = ({
                     if (callPendingRef.current) return;
                     callPendingRef.current = true;
                     setCallPending(true);
+                    const commandScope = `${data.selectedCenterId}:${cashierId}:cashier-call-next`;
+                    const commandId = getOrCreateCommandIntent(
+                      commandScope,
+                      `${data.selectedCenterId}:${cashierId}`,
+                    );
                     try {
-                      const result = await callNextForCashierRealtime(data, cashierId);
+                      const result = await callNextForCashierRealtime(data, cashierId, commandId);
+                      if (result.outcome !== "idempotency_conflict") clearCommandIntent(commandScope, commandId);
                       setData(() => result.data);
                       if (result.outcome === "queue_empty") onFeedback("No hay turnos aprobados esperando caja.");
                       else if (result.outcome === "cashier_busy") onFeedback("Finalice o pause la atención actual antes de llamar otro turno.");

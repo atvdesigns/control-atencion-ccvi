@@ -183,6 +183,8 @@ const transactionContext = (overrides = {}) => ({
   uid: "user-1",
   timestamp: 123456,
   eventId: "event-transaction",
+  commandId: "00000000-0000-4000-8000-000000000001",
+  requestFingerprint: "fingerprint",
   ...overrides,
 });
 const populatedDay = (...cases) => ({
@@ -281,8 +283,10 @@ test("simultaneous calls never commit the same case", async () => {
     return result;
   };
   const results = await Promise.all([
-    runCallNextWindowTransaction(authoritativeSubscription(true), transact, transactionContext({ eventId: "event-a" })),
-    runCallNextWindowTransaction(authoritativeSubscription(true), transact, transactionContext({ eventId: "event-b" })),
+    runCallNextWindowTransaction(authoritativeSubscription(true), transact, transactionContext({ eventId: "event-a",
+      commandId: "00000000-0000-4000-8000-00000000000a" })),
+    runCallNextWindowTransaction(authoritativeSubscription(true), transact, transactionContext({ eventId: "event-b",
+      commandId: "00000000-0000-4000-8000-00000000000b" })),
   ]);
   const called = results.filter((result) => result.status === "called");
   assert.equal(called.length, 1);

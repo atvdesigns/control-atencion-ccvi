@@ -10,9 +10,11 @@ const windows = [
 const profile = (overrides = {}) => ({ uid: "user", role: "operator-window-1", centerIds: ["center"], centerAccess: { center: true }, enabled: true, ...overrides });
 
 test("validates the minimal priority input and rejects arbitrary fields", () => {
-  assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other" }), true);
+  const commandId = "00000000-0000-4000-8000-000000000001";
+  assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other", commandId }), true);
   assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "invalid" }), false);
-  assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other", publicCode: "V1-99" }), false);
+  assert.equal(functions.isPriorityArrivalInput({ centerId: "center", priorityType: "other", commandId,
+    publicCode: "V1-99" }), false);
 });
 
 for (const [name, candidate] of [

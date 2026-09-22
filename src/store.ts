@@ -660,6 +660,7 @@ export type PriorityArrivalOutcome =
   | "center-closed"
   | "config-unavailable"
   | "transaction-not-committed"
+  | "idempotency-conflict"
   | "created-public-sync-failed"
   | "unexpected-error";
 
@@ -676,6 +677,7 @@ export const createPriorityArrivalRealtime = async (
   role: Role,
   executionContextIsCurrent: () => boolean,
   currentTime = new Date(),
+  commandId?: string,
 ): Promise<PriorityArrivalResult> => {
   if (!executionContextIsCurrent()) {
     return { data, createdCase: null, outcome: "stale-context" };
@@ -693,7 +695,8 @@ export const createPriorityArrivalRealtime = async (
     return { data, createdCase: null, outcome: "center-closed" };
   }
   try {
-    const response = await createPriorityArrivalCallable(center.centerId, priorityType);
+    if (!commandId) return { data, createdCase: null, outcome: "unexpected-error" };
+    const response = await createPriorityArrivalCallable(center.centerId, priorityType, commandId);
     if ((response.outcome === "created" || response.outcome === "created_but_projection_sync_failed") &&
       response.createdCase && response.metadata && response.events) {
       const committedCase = response.createdCase;
@@ -720,6 +723,9 @@ export const createPriorityArrivalRealtime = async (
     }
     if (response.outcome === "transaction_conflict") {
       return { data, createdCase: null, outcome: "transaction-not-committed" };
+    }
+    if (response.outcome === "idempotency_conflict") {
+      return { data, createdCase: null, outcome: "idempotency-conflict" };
     }
     return {
       data, createdCase: null, outcome: "unexpected-error",
@@ -994,6 +1000,7 @@ export const callNextForOperatorRealtime = async (
   data: AppData,
   windowId: string,
   role: Role,
+  commandId?: string,
 ): Promise<{ data: AppData; outcome: CallNextWindowCaseOutcome }> => {
   if (!database) {
     const hasActiveCase = Object.values(data.cases).some(
@@ -1011,7 +1018,8 @@ export const callNextForOperatorRealtime = async (
   }
 
   const base = ensureSession(data);
-  const result = await callNextWindowCaseCallable(base.selectedCenterId, windowId);
+  if (!commandId) return { data: base, outcome: "no_eligible_case" };
+  const result = await callNextWindowCaseCallable(base.selectedCenterId, windowId, commandId);
   return { data: base, outcome: result.outcome };
 };
 
@@ -1748,13 +1756,15 @@ const mergeCashierCommandResponse = (
 export const callNextForCashierRealtime = async (
   data: AppData,
   cashierId: string,
+  commandId?: string,
 ): Promise<CashierRealtimeResult> => {
   if (!database) {
     const next = callNextForCashier(data, cashierId);
     return { data: next, outcome: next === data ? "queue_empty" : "called" };
   }
   const base = ensureSession(data);
-  return mergeCashierCommandResponse(base, await callNextCashierCaseCallable(base.selectedCenterId));
+  if (!commandId) return { data: base, outcome: "invalid_request" };
+  return mergeCashierCommandResponse(base, await callNextCashierCaseCallable(base.selectedCenterId, commandId));
 };
 
 export const startCashierAttention = (data: AppData, queueItemId: string): AppData => {

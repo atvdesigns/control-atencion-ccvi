@@ -14,6 +14,7 @@ vm.runInNewContext(compile("src/operationalCenterConfig.ts"), { exports: operati
 const configExports = {};
 vm.runInNewContext(compile("src/centerJourneyConfig.ts"), { exports: configExports });
 const transaction = { mode: "commit", projectionFails: false, calls: 0, projectionCalls: 0 };
+const commandId = "00000000-0000-4000-8000-000000000001";
 const firebase = {
   database: {}, ref: (_database, referencePath) => referencePath,
   runTransaction: async () => {
@@ -211,7 +212,7 @@ const capturePriorityAction = (requestedContext, getCurrentContext) => {
   const data = dataFor();
   const guard = operational.createOperationalExecutionGuard(requestedContext, getCurrentContext);
   return () => store.createPriorityArrivalRealtime(
-    data, "representation", "other", "operator-window-1", guard, atSantiago(12, 0),
+    data, "representation", "other", "operator-window-1", guard, atSantiago(12, 0), commandId,
   );
 };
 
@@ -357,7 +358,7 @@ test("realtime update changes ready config without resubscription", () => {
 test("public projection failure remains duplicate-safe", async () => {
   transaction.projectionFails = true;
   const result = await store.createPriorityArrivalRealtime(
-    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(12, 0),
+    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(12, 0), commandId,
   );
   transaction.projectionFails = false;
   assert.equal(result.outcome, "created-public-sync-failed");
@@ -370,17 +371,17 @@ test("public projection failure remains duplicate-safe", async () => {
 
 test("closed, aborted and successful creation have explicit outcomes", async () => {
   const closed = await store.createPriorityArrivalRealtime(
-    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(6, 59),
+    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(6, 59), commandId,
   );
   assert.equal(closed.outcome, "center-closed");
   transaction.mode = "abort";
   const aborted = await store.createPriorityArrivalRealtime(
-    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(12, 0),
+    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(12, 0), commandId,
   );
   transaction.mode = "commit";
   assert.equal(aborted.outcome, "transaction-not-committed");
   const created = await store.createPriorityArrivalRealtime(
-    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(12, 0),
+    dataFor(), "representation", "other", "operator-window-1", () => true, atSantiago(12, 0), commandId,
   );
   assert.equal(created.outcome, "created");
 });

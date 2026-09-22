@@ -22,7 +22,7 @@ test("Call Next and Start delegate to trusted callables without private day writ
 });
 
 test("callable payloads contain no cashier authority supplied by the browser", () => {
-  assert.match(service, /callNextCashierCaseCallable = \(centerId: string\)/);
+  assert.match(service, /callNextCashierCaseCallable = \(centerId: string, commandId: string\)/);
   assert.match(service, /startCashierAttentionCallable = \(centerId: string, queueItemId: string\)/);
   assert.doesNotMatch(body(service, "callNextCashierCaseCallable"), /cashierId|uid|role/);
 });
@@ -41,7 +41,9 @@ test("Call Next and Start have separate synchronous pending guards and clear fee
   assert.match(app, /No pudimos confirmar el inicio de la atención/);
 });
 
-test("no automatic retry or command id was introduced", () => {
+test("Call Next adds command id without automatic retry while Start remains state-guarded", () => {
   const callStart = `${body(store, "callNextForCashierRealtime")}\n${body(store, "startCashierAttentionRealtime")}`;
-  assert.doesNotMatch(callStart, /setTimeout|retry|commandId|idempotency/i);
+  assert.match(body(store, "callNextForCashierRealtime"), /commandId/);
+  assert.doesNotMatch(callStart, /setTimeout|\bretry\b/i);
+  assert.doesNotMatch(body(store, "startCashierAttentionRealtime"), /commandId|idempotency/i);
 });

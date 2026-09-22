@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase-admin/app";
 import { getDatabase } from "firebase-admin/database";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { onValueWritten } from "firebase-functions/v2/database";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
@@ -11,6 +11,7 @@ type ServiceType = "representation" | "vehicle_owner";
 interface KioskArrivalInput {
   centerId: string;
   serviceType: ServiceType;
+  commandId: string;
 }
 
 interface CenterWindow {
@@ -96,6 +97,52 @@ interface WindowDay {
   events?: Record<string, unknown>;
   [key: string]: unknown;
 }
+
+type IdempotentOperation =
+  | "createKioskArrival"
+  | "createPriorityArrival"
+  | "callNextWindowCase"
+  | "callNextCashierCase";
+
+interface CommandReceipt {
+  operation: IdempotentOperation;
+  requestFingerprint: string;
+  actorUid: string;
+  createdAt: number;
+  status: "committed";
+  resultCaseId: string;
+  resultPublicCode: string;
+  resultQueueItemId?: string;
+  resultEventId?: string;
+  projectionStatus: "pending" | "synced" | "failed";
+  warningCategory?: string | null;
+}
+
+const commandIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const commandFingerprint = (parts: Record<string, string>) => createHash("sha256")
+  .update(JSON.stringify(Object.fromEntries(Object.entries(parts).sort(([a], [b]) => a.localeCompare(b)))))
+  .digest("hex");
+
+const commandReceipt = (day: WindowDay, commandId: string) => {
+  const value = recordOf<unknown>(day.commandReceipts)[commandId];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as CommandReceipt
+    : null;
+};
+
+const receiptMatches = (
+  receipt: CommandReceipt,
+  operation: IdempotentOperation,
+  requestFingerprint: string,
+  actorUid: string,
+) => receipt.operation === operation && receipt.requestFingerprint === requestFingerprint &&
+  receipt.actorUid === actorUid && receipt.status === "committed";
+
+const withCommandReceipt = (day: WindowDay, commandId: string, receipt: CommandReceipt): WindowDay => ({
+  ...day,
+  commandReceipts: { ...recordOf(day.commandReceipts), [commandId]: receipt },
+});
 
 type OperationalProjection = {
   metadata: Record<string, unknown>;
@@ -203,6 +250,8 @@ interface CallNextWindowContext {
   uid: string;
   timestamp: number;
   eventId: string;
+  commandId: string;
+  requestFingerprint: string;
 }
 
 interface PriorityArrivalContext {
@@ -217,6 +266,9 @@ interface PriorityArrivalContext {
   publicToken: string;
   arrivalEventId: string;
   priorityEventId: string;
+  commandId: string;
+  requestFingerprint: string;
+  actorUid: string;
 }
 
 interface CommittedPriorityArrival {
@@ -328,6 +380,8 @@ interface CashierMutationContext {
   eventId: string;
   queueItemId?: string;
   note?: string | null;
+  commandId?: string;
+  requestFingerprint?: string;
 }
 
 interface CommittedCashierMutation {
@@ -356,12 +410,15 @@ const serviceTypes: ServiceType[] = ["representation", "vehicle_owner"];
 const priorityTypes: PriorityType[] = [
   "older_adult", "pregnant", "wheelchair_user", "disability", "reduced_mobility", "other",
 ];
-export const isPriorityArrivalInput = (value: unknown): value is { centerId: string; priorityType: PriorityType } => {
+export const isPriorityArrivalInput = (value: unknown): value is {
+  centerId: string; priorityType: PriorityType; commandId: string;
+} => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
-  return Object.keys(input).length === 2 && typeof input.centerId === "string" &&
+  return Object.keys(input).length === 3 && typeof input.centerId === "string" &&
     centerIdPattern.test(input.centerId) && typeof input.priorityType === "string" &&
-    priorityTypes.includes(input.priorityType as PriorityType);
+    priorityTypes.includes(input.priorityType as PriorityType) && typeof input.commandId === "string" &&
+    commandIdPattern.test(input.commandId);
 };
 const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const centerIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
@@ -407,6 +464,31 @@ export const selectNextCashierQueueItem = (
 
 export const applyCallNextCashierMutation = (currentDay: WindowDay | null, context: CashierMutationContext) => {
   if (!currentDay) return { status: "queue_empty" as const, day: undefined, committed: null };
+  if (!context.commandId || !context.requestFingerprint) {
+    return { status: "invalid_request" as const, day: undefined, committed: null };
+  }
+  const existingReceipt = commandReceipt(currentDay, context.commandId);
+  if (existingReceipt) {
+    if (!receiptMatches(existingReceipt, "callNextCashierCase", context.requestFingerprint, context.uid)) {
+      return { status: "idempotency_conflict" as const, day: undefined, committed: null };
+    }
+    const cases = recordOf<WindowCase>(currentDay.cases);
+    const queue = recordOf<CashierQueueItem>(currentDay.paymentQueue);
+    const caseRecord = cases[existingReceipt.resultCaseId];
+    const queueItem = existingReceipt.resultQueueItemId ? queue[existingReceipt.resultQueueItemId] : null;
+    const event = Object.values(recordOf<Record<string, unknown>>(currentDay.events)).find(
+      (item) => item.caseId === existingReceipt.resultCaseId && item.action === "called_to_cashier" &&
+        item.timestamp === existingReceipt.createdAt,
+    );
+    if (!caseRecord || !queueItem || !event) {
+      return { status: "conflict" as const, day: undefined, committed: null };
+    }
+    return {
+      status: "replayed" as const,
+      committed: { caseRecord, queueItem, event, metadata: recordOf(currentDay.metadata) },
+      day: currentDay,
+    };
+  }
   const cases = recordOf<WindowCase>(currentDay.cases);
   const queue = recordOf<CashierQueueItem>(currentDay.paymentQueue);
   if (Object.values(queue).some((item) => item.centerId === context.centerId && item.sessionId === context.sessionId &&
@@ -430,9 +512,16 @@ export const applyCallNextCashierMutation = (currentDay: WindowDay | null, conte
     timestamp: context.timestamp, optionalNote: null };
   const nextMetadata = { ...metadata, consecutivePriorityCasesForCashier: nextCount };
   const committed = { caseRecord, queueItem, event, metadata: nextMetadata };
-  return { status: "called" as const, committed, day: { ...currentDay, metadata: nextMetadata,
+  const mutatedDay = { ...currentDay, metadata: nextMetadata,
     cases: { ...cases, [current.caseId]: caseRecord }, paymentQueue: { ...queue, [next.queueItemId]: queueItem },
-    events: { ...recordOf(currentDay.events), [context.eventId]: event } } as WindowDay };
+    events: { ...recordOf(currentDay.events), [context.eventId]: event } } as WindowDay;
+  return { status: "called" as const, committed, day: withCommandReceipt(mutatedDay, context.commandId, {
+    operation: "callNextCashierCase", requestFingerprint: context.requestFingerprint,
+    actorUid: context.uid, createdAt: context.timestamp, status: "committed",
+    resultCaseId: current.caseId, resultPublicCode: current.publicCode,
+    resultQueueItemId: next.queueItemId, resultEventId: context.eventId,
+    projectionStatus: "pending", warningCategory: null,
+  }) };
 };
 
 export const applyStartCashierMutation = (currentDay: WindowDay | null, context: CashierMutationContext) => {
@@ -701,6 +790,15 @@ export const applyCallNextWindowMutation = (
   context: CallNextWindowContext,
 ) => {
   if (!currentDay) return { status: "no-eligible-case" as const, day: undefined, caseId: null };
+  const existingReceipt = commandReceipt(currentDay, context.commandId);
+  if (existingReceipt) {
+    if (!receiptMatches(existingReceipt, "callNextWindowCase", context.requestFingerprint, context.uid)) {
+      return { status: "idempotency-conflict" as const, day: undefined, caseId: null };
+    }
+    const replayedCase = recordOf<WindowCase>(currentDay.cases)[existingReceipt.resultCaseId];
+    if (!replayedCase) return { status: "transaction-conflict" as const, day: undefined, caseId: null };
+    return { status: "replayed" as const, day: currentDay, caseId: replayedCase.caseId };
+  }
   const cases = recordOf<WindowCase>(currentDay.cases);
   const hasActiveCase = Object.values(cases).some((caseItem) =>
     caseItem.centerId === context.centerId &&
@@ -732,7 +830,7 @@ export const applyCallNextWindowMutation = (
     operationalReassignmentQueuedAt: null,
   };
   const selectedForTransfer = typeof next.operationalReassignmentQueuedAt === "number";
-  const day: WindowDay = {
+  const mutatedDay: WindowDay = {
     ...currentDay,
     metadata: selectedForTransfer ? metadata : {
       ...metadata,
@@ -759,6 +857,12 @@ export const applyCallNextWindowMutation = (
       },
     },
   };
+  const day = withCommandReceipt(mutatedDay, context.commandId, {
+    operation: "callNextWindowCase", requestFingerprint: context.requestFingerprint,
+    actorUid: context.uid, createdAt: context.timestamp, status: "committed",
+    resultCaseId: next.caseId, resultPublicCode: next.publicCode,
+    resultEventId: context.eventId, projectionStatus: "pending", warningCategory: null,
+  });
   return { status: "called" as const, day, caseId: next.caseId, selectedForTransfer };
 };
 
@@ -802,13 +906,14 @@ export const runCallNextWindowTransaction = async (
     const mutationOutcome = outcomeHolder.value;
 
     if (transaction.committed) {
-      if (mutationOutcome?.status !== "called" || !mutationOutcome.caseId) {
+      if (!mutationOutcome || !["called", "replayed"].includes(mutationOutcome.status) || !mutationOutcome.caseId) {
         throw new Error("CALL_NEXT_TRANSACTION_INVALID_COMMIT");
       }
       return {
-        status: mutationOutcome.status,
+        status: mutationOutcome.status === "replayed" ? "called" as const : mutationOutcome.status,
         caseId: mutationOutcome.caseId,
         committedDay: transaction.value,
+        replayed: mutationOutcome.status === "replayed",
       };
     }
 
@@ -905,6 +1010,15 @@ export const applyPriorityArrivalMutation = (
     return { status: "transaction-conflict" as const, day: undefined };
   }
   const day = currentDay ?? {};
+  const existingReceipt = commandReceipt(day, context.commandId);
+  if (existingReceipt) {
+    if (!receiptMatches(existingReceipt, "createPriorityArrival", context.requestFingerprint, context.actorUid)) {
+      return { status: "idempotency-conflict" as const, day: undefined };
+    }
+    const replayedCase = recordOf<Record<string, unknown>>(day.cases)[existingReceipt.resultCaseId];
+    if (!replayedCase) return { status: "transaction-conflict" as const, day: undefined };
+    return { status: "replayed" as const, caseRecord: replayedCase, day };
+  }
   const metadata = recordOf<unknown>(day.metadata);
   if (metadata.status === "closed") return { status: "closed" as const, day: undefined };
   const windowSequences = recordOf<number>(metadata.windowSequences);
@@ -939,7 +1053,7 @@ export const applyPriorityArrivalMutation = (
   return {
     status: "created" as const,
     caseRecord,
-    day: {
+    day: withCommandReceipt({
       ...day,
       metadata: {
         sessionId: context.sessionId, centerId: context.centerId, date: context.dayId, status: "open",
@@ -959,7 +1073,12 @@ export const applyPriorityArrivalMutation = (
           context.priorityEventId, "priority_created", "waiting_document_validation", context.priorityType,
         ),
       },
-    } as WindowDay,
+    } as WindowDay, context.commandId, {
+      operation: "createPriorityArrival", requestFingerprint: context.requestFingerprint,
+      actorUid: context.actorUid, createdAt: context.timestamp, status: "committed",
+      resultCaseId: context.caseId, resultPublicCode: publicCode,
+      projectionStatus: "pending", warningCategory: null,
+    }),
   };
 };
 
@@ -984,10 +1103,16 @@ export const runPriorityArrivalTransaction = async (
       return outcomeHolder.value.day;
     });
     const outcome = outcomeHolder.value;
-    if (transaction.committed && outcome?.status === "created") {
-      return { status: "created" as const, caseRecord: outcome.caseRecord, committedDay: transaction.value };
+    if (transaction.committed && outcome && ["created", "replayed"].includes(outcome.status)) {
+      return {
+        status: "created" as const, caseRecord: outcome.caseRecord, committedDay: transaction.value,
+        replayed: outcome.status === "replayed",
+      };
     }
     if (outcome?.status === "closed") return { status: "closed" as const, caseRecord: null, committedDay: null };
+    if (outcome?.status === "idempotency-conflict") {
+      return { status: "idempotency-conflict" as const, caseRecord: null, committedDay: null };
+    }
     return { status: "transaction-conflict" as const, caseRecord: null, committedDay: null };
   } finally {
     detachListener();
@@ -1581,14 +1706,17 @@ const parseInput = (value: unknown): KioskArrivalInput => {
   const input = value as Record<string, unknown>;
   const keys = Object.keys(input);
   if (
-    keys.length !== 2 ||
+    keys.length !== 3 ||
     !keys.includes("centerId") ||
     !keys.includes("serviceType") ||
+    !keys.includes("commandId") ||
     typeof input.centerId !== "string" ||
     !centerIdPattern.test(input.centerId) ||
     typeof input.serviceType !== "string" ||
     input.serviceType.length > 32 ||
-    !serviceTypes.includes(input.serviceType as ServiceType)
+    !serviceTypes.includes(input.serviceType as ServiceType) ||
+    typeof input.commandId !== "string" ||
+    !commandIdPattern.test(input.commandId)
   ) {
     throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
   }
@@ -1596,6 +1724,7 @@ const parseInput = (value: unknown): KioskArrivalInput => {
   return {
     centerId: input.centerId,
     serviceType: input.serviceType as ServiceType,
+    commandId: input.commandId,
   };
 };
 
@@ -1675,7 +1804,7 @@ export const createKioskArrival = onCall(
   { region: "us-central1", enforceAppCheck: false },
   async (request) => {
     try {
-      const { centerId, serviceType } = parseInput(request.data);
+      const { centerId, serviceType, commandId } = parseInput(request.data);
       const database = getDatabase();
       const centerSnapshot = await database.ref(`centers/${centerId}`).get();
       if (!centerSnapshot.exists()) {
@@ -1714,13 +1843,28 @@ export const createKioskArrival = onCall(
       }
 
       const sessionId = `${centerId}-${dayId}`;
+      const requestFingerprint = commandFingerprint({
+        operation: "createKioskArrival", centerId, operationalDayId: dayId, serviceType,
+        windowId: assignedWindow.windowId,
+      });
       const caseId = randomUUID();
       const publicToken = randomUUID();
       const eventId = randomUUID();
       const dayReference = database.ref(`days/${centerId}/${dayId}`);
+      let resolvedCaseId: string = caseId;
+      let idempotencyConflict = false;
       const transaction = await dayReference.transaction(
         (currentValue) => {
           const currentDay = recordOf<unknown>(currentValue);
+          const existingReceipt = commandReceipt(currentDay, commandId);
+          if (existingReceipt) {
+            if (!receiptMatches(existingReceipt, "createKioskArrival", requestFingerprint, "kiosk")) {
+              idempotencyConflict = true;
+              return;
+            }
+            resolvedCaseId = existingReceipt.resultCaseId;
+            return currentDay;
+          }
           const currentMetadata = recordOf<unknown>(currentDay.metadata);
           if (currentMetadata.status === "closed") return;
 
@@ -1788,7 +1932,7 @@ export const createKioskArrival = onCall(
             optionalNote: null,
           };
 
-          return {
+          const mutatedDay = {
             ...currentDay,
             metadata: {
               sessionId,
@@ -1817,37 +1961,53 @@ export const createKioskArrival = onCall(
               ...recordOf(currentDay.events),
               [eventId]: arrivalEvent,
             },
-          };
+          } as WindowDay;
+          return withCommandReceipt(mutatedDay, commandId, {
+            operation: "createKioskArrival", requestFingerprint, actorUid: "kiosk",
+            createdAt: timestamp, status: "committed", resultCaseId: caseId,
+            resultPublicCode: publicCode, projectionStatus: "pending", warningCategory: null,
+          });
         },
         undefined,
         false,
       );
 
       if (!transaction.committed) {
+        if (idempotencyConflict) {
+          throw new HttpsError("already-exists", "El identificador de la operación ya fue utilizado.");
+        }
         throw new HttpsError("failed-precondition", "La jornada no está disponible para emitir turnos.");
       }
 
-      const committedCase = transaction.snapshot.child(`cases/${caseId}`).val() as
-        | { publicCode?: unknown }
+      const committedCase = transaction.snapshot.child(`cases/${resolvedCaseId}`).val() as
+        | { publicCode?: unknown; publicToken?: unknown; currentState?: unknown }
         | null;
-      if (!committedCase || typeof committedCase.publicCode !== "string") {
+      if (!committedCase || typeof committedCase.publicCode !== "string" ||
+        typeof committedCase.publicToken !== "string") {
         throw new Error("COMMITTED_CASE_NOT_FOUND");
       }
+      const committedReceipt = commandReceipt(transaction.snapshot.val() as WindowDay, commandId);
+      if (!committedReceipt) throw new Error("COMMITTED_RECEIPT_NOT_FOUND");
 
-      await database.ref(`public/turns/${publicToken}`).set({
-        centerId,
-        publicCode: committedCase.publicCode,
-        isPriority: false,
-        status: "Prepare su documentación",
-        serviceType,
-        serviceLabel: assignedWindow.serviceLabel,
-        destination: `Ventanilla ${assignedWindow.windowNumber}`,
-        updatedAt: timestamp,
-        requirements: publicRequirements(center, serviceType),
-        paymentMethods: publicPaymentMethods(center),
+      if (committedCase.currentState === "waiting_document_validation") {
+        await database.ref(`public/turns/${committedCase.publicToken}`).set({
+          centerId,
+          publicCode: committedCase.publicCode,
+          isPriority: false,
+          status: "Prepare su documentación",
+          serviceType,
+          serviceLabel: assignedWindow.serviceLabel,
+          destination: `Ventanilla ${assignedWindow.windowNumber}`,
+          updatedAt: committedReceipt.createdAt,
+          requirements: publicRequirements(center, serviceType),
+          paymentMethods: publicPaymentMethods(center),
+        });
+      }
+
+      await dayReference.child(`commandReceipts/${commandId}`).update({
+        projectionStatus: "synced", warningCategory: null,
       });
-
-      return { publicCode: committedCase.publicCode, publicToken };
+      return { publicCode: committedCase.publicCode, publicToken: committedCase.publicToken };
     } catch (error) {
       if (error instanceof HttpsError) throw error;
       console.error("createKioskArrival failed", error);
@@ -1895,6 +2055,7 @@ export const createPriorityArrival = onCall(
       }
       const centerId = request.data.centerId;
       const priorityType = request.data.priorityType;
+      const commandId = request.data.commandId;
       centerForLog = centerId;
       const uid = request.auth.uid;
       const database = getDatabase();
@@ -1940,6 +2101,12 @@ export const createPriorityArrival = onCall(
         caseId: randomUUID(), publicToken: randomUUID(),
         priorityEventId: `${traceGroupId}-0-priority`,
         arrivalEventId: `${traceGroupId}-1-arrival`,
+        commandId,
+        requestFingerprint: commandFingerprint({
+          operation: "createPriorityArrival", centerId, operationalDayId: schedule.dayId,
+          windowId: assignedWindow.windowId, priorityType,
+        }),
+        actorUid: uid,
       };
       const dayReference = database.ref(`days/${centerId}/${schedule.dayId}`);
       commitRecovery = {
@@ -1971,35 +2138,70 @@ export const createPriorityArrival = onCall(
         log("closed", "transaction");
         return { ok: false, outcome: "closed" as const };
       }
+      if (transaction.status === "idempotency-conflict") {
+        log("idempotency_conflict", "transaction");
+        return { ok: false, outcome: "idempotency_conflict" as const };
+      }
       if (transaction.status !== "created" || !transaction.caseRecord || !transaction.committedDay) {
         log("transaction_conflict", "transaction");
         return { ok: false, outcome: "transaction_conflict" as const };
       }
       committed = true;
       const createdCase = transaction.caseRecord;
+      if (typeof createdCase.publicCode !== "string" || typeof createdCase.publicToken !== "string") {
+        throw new Error("COMMITTED_CASE_NOT_FOUND");
+      }
+      const createdPublicCode = createdCase.publicCode;
+      const createdPublicToken = createdCase.publicToken;
+      const createdCaseId = String(createdCase.caseId);
+      const committedReceipt = commandReceipt(transaction.committedDay, commandId);
+      if (!committedReceipt) throw new Error("COMMITTED_RECEIPT_NOT_FOUND");
       const metadata = transaction.committedDay.metadata;
-      const events = recordOf(transaction.committedDay.events);
+      const events = recordOf<Record<string, unknown>>(transaction.committedDay.events);
+      const replayEvents = Object.values(events)
+        .filter((item) => item.caseId === createdCase.caseId &&
+          ["priority_created", "arrival_created"].includes(String(item.action)))
+        .sort((a, b) => Number(a.timestamp) - Number(b.timestamp) || String(a.eventId).localeCompare(String(b.eventId)));
       committedPayload = {
         createdCase,
         metadata,
-        events: [events[context.priorityEventId], events[context.arrivalEventId]],
+        events: transaction.replayed
+          ? [replayEvents.find((item) => item.action === "priority_created"),
+            replayEvents.find((item) => item.action === "arrival_created")] as [unknown, unknown]
+          : [events[context.priorityEventId], events[context.arrivalEventId]],
       };
+      if (createdCase.currentState !== "waiting_document_validation" &&
+        committedReceipt.projectionStatus === "failed") {
+        log("created_but_projection_sync_failed", "projection_replay");
+        return priorityCreatedResponse(committedPayload, "created_but_projection_sync_failed");
+      }
       const response = await completePriorityArrivalAfterCommit(committedPayload, async () => {
+        if (createdCase.currentState !== "waiting_document_validation") return;
         await database.ref().update({
-          [`public/turns/${context.publicToken}`]: {
-            centerId, publicCode: createdCase.publicCode, isPriority: true,
+          [`public/turns/${createdPublicToken}`]: {
+            centerId, publicCode: createdPublicCode, isPriority: true,
             status: "Prepare su documentación", serviceType: assignedWindow.serviceType,
             serviceLabel: assignedWindow.serviceLabel,
-            destination: `Ventanilla ${assignedWindow.windowNumber}`, updatedAt: timestamp,
+            destination: `Ventanilla ${assignedWindow.windowNumber}`, updatedAt: committedReceipt.createdAt,
             requirements: publicRequirements(center, assignedWindow.serviceType),
             paymentMethods: publicPaymentMethods(center),
           },
           ...publicDisplayProjectionUpdates(
-            centerId, schedule.dayId, context.caseId, createdCase.publicCode, null,
+            centerId, schedule.dayId, createdCaseId, createdPublicCode, null,
           ),
+        });
+        await dayReference.child(`commandReceipts/${commandId}`).update({
+          projectionStatus: "synced", warningCategory: null,
         });
       });
       if (response.outcome === "created_but_projection_sync_failed") {
+        try {
+          await dayReference.child(`commandReceipts/${commandId}`).update({
+            projectionStatus: "failed", warningCategory: "created_but_projection_sync_failed",
+          });
+        } catch {
+          // The committed receipt remains the authoritative deduplication gate.
+        }
         log("created_but_projection_sync_failed", "projection");
         return response;
       }
@@ -2606,11 +2808,13 @@ export const callNextWindowCase = onCall(
       }
       const input = request.data as Record<string, unknown>;
       if (
-        Object.keys(input).length !== 2 ||
+        Object.keys(input).length !== 3 ||
         typeof input.centerId !== "string" ||
         !centerIdPattern.test(input.centerId) ||
         typeof input.windowId !== "string" ||
-        !windowIdPattern.test(input.windowId)
+        !windowIdPattern.test(input.windowId) ||
+        typeof input.commandId !== "string" ||
+        !commandIdPattern.test(input.commandId)
       ) {
         logFinalOutcome("invalid_request");
         throw new HttpsError("invalid-argument", "Los datos de la solicitud no son válidos.");
@@ -2618,6 +2822,7 @@ export const callNextWindowCase = onCall(
 
       const centerId = input.centerId;
       const requestedWindowId = input.windowId;
+      const commandId = input.commandId;
       const uid = request.auth.uid;
       const database = getDatabase();
       const [profileSnapshot, centerSnapshot] = await Promise.all([
@@ -2664,6 +2869,9 @@ export const callNextWindowCase = onCall(
       const timestamp = now.getTime();
       const { dayId } = dateTimeInZone(now, center.timezone);
       const sessionId = `${centerId}-${dayId}`;
+      const requestFingerprint = commandFingerprint({
+        operation: "callNextWindowCase", centerId, operationalDayId: dayId, windowId, actorUid: uid,
+      });
       const eventId = randomUUID();
       const dayReference = database.ref(`days/${centerId}/${dayId}`);
       failureStage = "day_hydration";
@@ -2696,8 +2904,18 @@ export const callNextWindowCase = onCall(
             uid,
             timestamp,
             eventId,
+            commandId,
+            requestFingerprint,
         },
       );
+
+      if (mutationOutcome.status === "idempotency-conflict") {
+        logFinalOutcome("idempotency_conflict");
+        throw new HttpsError("already-exists", "El identificador de la operación ya fue utilizado.");
+      }
+      if (mutationOutcome.status === "transaction-conflict" || mutationOutcome.status === "replayed") {
+        throw new Error("CALL_NEXT_TRANSACTION_INVALID_COMMIT");
+      }
 
       if (mutationOutcome.status !== "called" || !mutationOutcome.caseId) {
         const response = callNextWindowResponse(mutationOutcome.status);
@@ -2706,40 +2924,57 @@ export const callNextWindowCase = onCall(
       }
       const committedCase = mutationOutcome.committedDay?.cases?.[mutationOutcome.caseId] ?? null;
       if (!committedCase) throw new Error("COMMITTED_CASE_NOT_FOUND");
+      const committedReceipt = mutationOutcome.committedDay
+        ? commandReceipt(mutationOutcome.committedDay, commandId)
+        : null;
+      const projectionEventId = committedReceipt?.resultEventId;
+      if (!projectionEventId) throw new Error("COMMITTED_RECEIPT_NOT_FOUND");
 
       const destination = `Ventanilla ${committedCase.assignedWindowNumber}`;
       failureStage = "public_projection";
-      await database.ref().update({
-        [`public/turns/${committedCase.publicToken}`]: {
-          centerId,
-          publicCode: committedCase.publicCode,
-          isPriority: committedCase.isPriority,
-          status: `Diríjase a ${destination}`,
-          serviceType: committedCase.serviceType,
-          serviceLabel: committedCase.serviceLabel,
-          destination,
-          updatedAt: timestamp,
-          requirements: publicRequirements(center, committedCase.serviceType),
-          paymentMethods: publicPaymentMethods(center),
-        },
-        ...publicDisplayProjectionUpdates(centerId, dayId, committedCase.caseId, committedCase.publicCode, {
-          publicCode: committedCase.publicCode,
-          isPriority: committedCase.isPriority,
-          status: `Diríjase a ${destination}`,
-          destination,
-          updatedAt: timestamp,
-        }),
-        [`public/displayCalls/${centerId}/${dayId}/${eventId}`]: {
-          publicCode: committedCase.publicCode,
-          isPriority: committedCase.isPriority,
-          destinationType: "window",
-          destinationLabel: destination,
-          calledAt: timestamp,
-        },
-      });
+      const projectionStillApplicable = committedCase.currentState === "called_to_window" &&
+        committedCase.calledToWindowAt === committedReceipt.createdAt;
+      let projectionFailed = !projectionStillApplicable && committedReceipt.projectionStatus === "failed";
+      if (projectionStillApplicable) {
+        try {
+          await database.ref().update({
+            [`public/turns/${committedCase.publicToken}`]: {
+              centerId, publicCode: committedCase.publicCode, isPriority: committedCase.isPriority,
+              status: `Diríjase a ${destination}`, serviceType: committedCase.serviceType,
+              serviceLabel: committedCase.serviceLabel, destination, updatedAt: committedReceipt.createdAt,
+              requirements: publicRequirements(center, committedCase.serviceType),
+              paymentMethods: publicPaymentMethods(center),
+            },
+            ...publicDisplayProjectionUpdates(centerId, dayId, committedCase.caseId, committedCase.publicCode, {
+              publicCode: committedCase.publicCode, isPriority: committedCase.isPriority,
+              status: `Diríjase a ${destination}`, destination, updatedAt: committedReceipt.createdAt,
+            }),
+            [`public/displayCalls/${centerId}/${dayId}/${projectionEventId}`]: {
+              publicCode: committedCase.publicCode, isPriority: committedCase.isPriority,
+              destinationType: "window", destinationLabel: destination, calledAt: committedReceipt.createdAt,
+            },
+          });
+          await dayReference.child(`commandReceipts/${commandId}`).update({
+            projectionStatus: "synced", warningCategory: null,
+          });
+        } catch {
+          projectionFailed = true;
+          try {
+            await dayReference.child(`commandReceipts/${commandId}`).update({
+              projectionStatus: "failed", warningCategory: "called_projection_failed",
+            });
+          } catch {
+            // The committed receipt remains the authoritative deduplication gate.
+          }
+        }
+      }
 
-      logFinalOutcome("called", { publicCode: committedCase.publicCode });
-      return callNextWindowResponse("called", committedCase.publicCode);
+      logFinalOutcome(projectionFailed ? "called_projection_failed" : "called", {
+        publicCode: committedCase.publicCode,
+      });
+      return projectionFailed
+        ? { ok: true, outcome: "called_projection_failed" as const, publicCode: committedCase.publicCode }
+        : callNextWindowResponse("called", committedCase.publicCode);
     } catch (error) {
       if (!finalOutcomeLogged) {
         const errorCategory = error instanceof Error && [
@@ -2758,14 +2993,19 @@ export const callNextWindowCase = onCall(
   },
 );
 
-const cashierCommandInput = (value: unknown, requireQueueItem: boolean) => {
+const cashierCommandInput = (value: unknown, requireQueueItem: boolean): {
+  centerId: string; queueItemId?: string; commandId?: string;
+} | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const input = value as Record<string, unknown>;
-  const expectedKeys = requireQueueItem ? ["centerId", "queueItemId"] : ["centerId"];
+  const expectedKeys = requireQueueItem ? ["centerId", "queueItemId"] : ["centerId", "commandId"];
   if (Object.keys(input).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(input, key)) ||
     typeof input.centerId !== "string" || !centerIdPattern.test(input.centerId) ||
-    (requireQueueItem && (typeof input.queueItemId !== "string" || !windowIdPattern.test(input.queueItemId)))) return null;
-  return { centerId: input.centerId, ...(requireQueueItem ? { queueItemId: input.queueItemId as string } : {}) };
+    (requireQueueItem && (typeof input.queueItemId !== "string" || !windowIdPattern.test(input.queueItemId))) ||
+    (!requireQueueItem && (typeof input.commandId !== "string" || !commandIdPattern.test(input.commandId)))) return null;
+  return { centerId: input.centerId, ...(requireQueueItem ? { queueItemId: input.queueItemId as string } : {
+    commandId: input.commandId as string,
+  }) };
 };
 
 const cashierProjection = async (
@@ -2818,6 +3058,13 @@ const executeCashierCallable = async (
   const context: CashierMutationContext = {
     centerId: input.centerId, sessionId: `${input.centerId}-${dayId}`, cashierId: cashier.cashierId,
     uid, timestamp: Date.now(), eventId: randomUUID(), ...(input.queueItemId ? { queueItemId: input.queueItemId } : {}),
+    ...(operation === "call" ? {
+      commandId: input.commandId,
+      requestFingerprint: commandFingerprint({
+        operation: "callNextCashierCase", centerId: input.centerId,
+        operationalDayId: dayId, cashierId: cashier.cashierId, actorUid: uid,
+      }),
+    } : {}),
   };
   const reference = database.ref(`days/${input.centerId}/${dayId}`);
   try {
@@ -2831,9 +3078,35 @@ const executeCashierCallable = async (
     if (!result.committed) return { ok: false, outcome: result.status };
     const committed = result.committed;
     try {
-      await cashierProjection(database, center, cashier, dayId, committed, operation === "call");
+      const projectionStillApplicable = operation !== "call" ||
+        (committed.caseRecord.currentState === "called_to_cashier" &&
+          committed.queueItem.state === "called_to_cashier" &&
+          committed.queueItem.calledAt === committed.caseRecord.calledToCashierAt);
+      const priorReceipt = operation === "call" && input.commandId
+        ? (await reference.child(`commandReceipts/${input.commandId}`).get()).val() as CommandReceipt | null
+        : null;
+      if (projectionStillApplicable) {
+        await cashierProjection(database, center, cashier, dayId, committed, operation === "call");
+      }
+      if (!projectionStillApplicable && priorReceipt?.projectionStatus === "failed") {
+        return { ok: true, outcome: "called_projection_failed" as const, ...committed };
+      }
+      if (operation === "call" && input.commandId) {
+        await reference.child(`commandReceipts/${input.commandId}`).update({
+          projectionStatus: "synced", warningCategory: null,
+        });
+      }
       return { ok: true, outcome: operation === "call" ? "called" as const : "started" as const, ...committed };
     } catch {
+      if (operation === "call" && input.commandId) {
+        try {
+          await reference.child(`commandReceipts/${input.commandId}`).update({
+            projectionStatus: "failed", warningCategory: "called_projection_failed",
+          });
+        } catch {
+          // The committed receipt remains sufficient to prevent a repeated private mutation.
+        }
+      }
       return { ok: true, outcome: operation === "call" ? "called_projection_failed" as const : "started_projection_failed" as const,
         ...committed };
     }
